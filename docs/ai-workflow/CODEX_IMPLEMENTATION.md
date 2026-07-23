@@ -19,6 +19,164 @@ These instructions apply to all source code, tests, scripts, notebooks, configur
 
 ---
 
+## 0. Agreed AI Tool Workflow and Codex Ownership
+
+This section defines how Codex participates in the agreed project workflow. It supplements the detailed implementation standards in the rest of this file and does not replace or weaken them.
+
+### 0.1 Agreed workflow
+
+```text
+ChatGPT
+→ plans the task, explains the concepts, defines the architecture,
+  acceptance criteria, boundaries, and prepares the implementation prompt
+
+Codex
+→ receives the approved prompt and builds the complete implementation
+  end to end, including production code, notebooks where requested,
+  automated tests, regression coverage, validation, and required documentation
+
+Cursor
+→ is used after Codex for local inspection, execution, small edits,
+  documentation polishing, minor corrections, Git review, and environment-specific debugging
+
+Claude
+→ performs the final independent review after implementation and local verification
+```
+
+### 0.2 Codex is the primary implementation engineer
+
+For this project, Codex is the default tool that implements the complete task described in the ChatGPT-prepared prompt.
+
+Codex must not assume that Cursor will complete missing core implementation. Codex is responsible for delivering the smallest complete, production-quality change that satisfies the ticket, including all applicable tests and documentation.
+
+Codex may implement:
+
+- Notebooks and reusable supporting modules.
+- Data ingestion, validation, cleaning, and transformation.
+- Target and feature engineering.
+- Time-based data splitting.
+- Baseline and advanced model pipelines.
+- Evaluation, calibration, explainability, and persistence.
+- FastAPI services and batch pipelines.
+- Database repositories and migrations.
+- Docker, CI/CD, MLflow, monitoring, and dashboards.
+- Unit, integration, contract, data-quality, regression, end-to-end, and performance tests.
+
+The nature of the work being AI, ML, data engineering, multi-file, or production-oriented does not change this ownership. When the prompt assigns the implementation to Codex, Codex should complete it end to end.
+
+### 0.3 Prompt readiness
+
+Codex should expect the implementation prompt to define, where applicable:
+
+- Objective and business context.
+- Current project state.
+- Expected inputs and outputs.
+- Acceptance criteria.
+- Files or modules likely to be affected.
+- Architecture and reuse expectations.
+- Testing requirements.
+- Compatibility constraints.
+- Prohibited changes.
+- Required completion report.
+
+Codex must still inspect the repository and verify assumptions. A prompt is not permission to ignore the existing architecture.
+
+When a critical ambiguity prevents safe implementation, Codex must:
+
+1. Identify the exact ambiguity.
+2. Explain the affected design or behaviour.
+3. Avoid making a broad unsupported assumption.
+4. Request clarification or state the smallest safe assumption explicitly.
+
+Do not use minor ambiguity as a reason to avoid completing otherwise well-defined work.
+
+### 0.4 End-to-end implementation responsibility
+
+For each assigned ticket, Codex must:
+
+1. Inspect the relevant repository structure.
+2. Understand existing behaviour and contracts.
+3. Reuse existing components where appropriate.
+4. Implement the complete requested capability.
+5. Add all applicable automated tests.
+6. Add regression tests for changed behaviour and bug fixes.
+7. Run targeted validation and broader checks when feasible.
+8. Update technical documentation required by the change.
+9. Produce the completion report required by this file.
+10. Provide clear local verification steps for Cursor.
+
+Codex must not hand off incomplete core code to Cursor under labels such as:
+
+- “finish this manually”;
+- “add tests later”;
+- “wire the remaining modules in Cursor”;
+- “complete the production path after review.”
+
+A task is ready for Cursor only after the implementation is complete enough for local inspection and minor correction.
+
+### 0.5 Cursor handoff boundary
+
+After Codex completes the implementation, Cursor may be used for:
+
+- Running notebooks and inspecting visual output.
+- Running the application locally.
+- Running tests and commands supplied by Codex.
+- Inspecting the Git diff.
+- Fixing typographical errors.
+- Improving Markdown and comments without changing behaviour.
+- Making small, isolated, low-risk corrections.
+- Resolving local environment or path issues.
+- Committing and pushing the reviewed change.
+
+Cursor should not be expected to design or rebuild the core feature after Codex reports completion.
+
+If local verification reveals a substantial defect involving architecture, business logic, data correctness, model behaviour, API contracts, database behaviour, or multiple modules, the issue should be returned to Codex with a focused correction prompt.
+
+### 0.6 Claude handoff boundary
+
+Claude reviews the final working state after:
+
+- Codex has completed implementation and its validation report.
+- Cursor has performed local execution and only small permitted edits.
+- The diff is focused and temporary debugging changes are removed.
+- Relevant test evidence is available.
+
+Codex must make its implementation reviewable by clearly documenting:
+
+- What changed.
+- What existing components were reused.
+- What tests were added or updated.
+- What commands were run.
+- What remains unverified.
+- Whether any contracts changed.
+- Risks, limitations, and local verification instructions.
+
+### 0.7 Handling Claude findings
+
+After Claude's review:
+
+- Confirmed code, architecture, data, model, API, database, security, or regression findings return to Codex.
+- Small documentation, spelling, formatting, or clearly isolated low-risk corrections may be handled in Cursor.
+- Disputed or requirement-level findings return to ChatGPT for clarification before implementation changes.
+- Codex must verify each finding against the current code rather than applying reviewer suggestions blindly.
+- Every confirmed bug fix must include appropriate regression protection.
+
+### 0.8 Workflow completion gate
+
+The complete workflow is:
+
+```text
+1. ChatGPT prepares the plan and implementation prompt.
+2. Codex implements the complete task and runs applicable validation.
+3. Cursor performs local execution, inspection, documentation polish, and small edits.
+4. Claude performs an independent final review.
+5. Confirmed substantial findings return to Codex.
+6. Cursor verifies the fixes locally.
+7. Claude performs a focused re-review when required.
+8. The developer gives final approval and merges.
+```
+
+---
 ## 1. Core Engineering Principles
 
 ### 1.1 Optimize for human maintainability
