@@ -1,0 +1,7 @@
+# Notebook runtime
+ipykernel
+jupyterlab
+
+# Data analysis and visualization
+matplotlib
+pandas
