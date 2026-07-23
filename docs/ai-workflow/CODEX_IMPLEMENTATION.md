@@ -168,55 +168,24 @@ Any change that can alter model training or prediction output must be treated as
 
 Organize code by clear responsibility.
 
-A recommended structure is:
+The canonical target structure is defined in
+[`../architecture/project_structure.md`](../architecture/project_structure.md).
+Use that document when choosing locations for source code, configuration, data,
+documentation, notebooks, applications, tests, reports, artifacts, and
+operational tooling.
 
-```text
-src/
-├── api/
-│   ├── routes/
-│   ├── schemas/
-│   ├── dependencies/
-│   └── services/
-├── config/
-├── data/
-│   ├── ingestion/
-│   ├── validation/
-│   ├── cleaning/
-│   ├── processing/
-│   └── splitting/
-├── features/
-├── models/
-│   ├── baselines/
-│   ├── training/
-│   ├── evaluation/
-│   ├── calibration/
-│   ├── explainability/
-│   └── persistence/
-├── monitoring/
-├── storage/
-├── pipelines/
-├── dashboard/
-├── common/
-│   ├── exceptions/
-│   ├── logging/
-│   ├── types/
-│   └── utilities/
-└── cli/
-```
+The target structure is a guide for incremental development, not a command to
+create unused directories or placeholder modules. Codex must:
 
-Tests should mirror the source structure:
-
-```text
-tests/
-├── unit/
-├── integration/
-├── contract/
-├── regression/
-├── data_quality/
-└── performance/
-```
-
-This structure is a guide, not a command to reorganize the repository. Codex must follow the existing project structure when it is already coherent.
+- Place new files in the canonical location when that area of the platform is
+  being implemented.
+- Reuse coherent existing structure and migrate it only when the current task
+  requires the change.
+- Avoid scaffolding future months or components before they are needed.
+- Keep tests aligned with the corresponding source responsibility and the test
+  categories defined by the canonical structure.
+- Document intentional deviations when the canonical location would make the
+  implementation less clear or conflict with an established public contract.
 
 ### 3.2 Keep module responsibilities clear
 

@@ -52,11 +52,12 @@ Before reviewing, Claude must identify and use the relevant sources of truth in 
 
 1. The user’s current requirement and acceptance criteria.
 2. Project documentation and business definitions.
-3. `CODEX_IMPLEMENTATION.md`.
-4. Existing repository architecture and conventions.
-5. Existing tests and contracts.
-6. The implementation diff.
-7. Test, lint, type-check, and build results.
+3. [`../architecture/project_structure.md`](../architecture/project_structure.md).
+4. `CODEX_IMPLEMENTATION.md`.
+5. Existing repository architecture and conventions.
+6. Existing tests and contracts.
+7. The implementation diff.
+8. Test, lint, type-check, and build results.
 
 If these sources conflict, the reviewer must report the conflict instead of silently choosing one.
 
@@ -90,6 +91,8 @@ Review more than the modified lines when necessary.
 Inspect:
 
 - The relevant directory structure.
+- The canonical target structure in
+  [`../architecture/project_structure.md`](../architecture/project_structure.md).
 - Existing modules serving a similar purpose.
 - Shared utilities and schemas.
 - Current logging and error-handling patterns.
@@ -99,6 +102,12 @@ Inspect:
 - CI rules.
 
 The reviewer must check whether the new implementation reuses existing code appropriately or creates an unnecessary parallel solution.
+
+The reviewer must also verify that new files use the canonical location for
+their responsibility. Do not require unused directories, placeholder modules,
+or future-stage infrastructure solely to make the repository resemble the
+complete target tree. Report intentional structural deviations only when they
+create a concrete correctness, maintainability, or compatibility risk.
 
 ---
 
