@@ -300,28 +300,37 @@ urban-operations-intelligence/
 │       └── model_inputs.json
 │
 ├── reports/
-│   ├── month_1/
-│   │   ├── data_overview.md
+│   ├── 01_data_overview/
+│   │   ├── figures/
+│   │   └── tables/
+│   │
+│   ├── 02_schema_and_quality_analysis/
 │   │   ├── data_quality_report.md
+│   │   ├── figures/
+│   │   └── tables/
+│   │
+│   ├── 03_target_feasibility/
+│   │   ├── figures/
+│   │   └── tables/
+│   │
+│   ├── 04_scope_selection/
+│   │   ├── figures/
+│   │   └── tables/
+│   │
+│   ├── 05_exploratory_analysis/
 │   │   ├── eda_report.md
+│   │   ├── figures/
+│   │   └── tables/
+│   │
+│   ├── 06_baseline_evaluation/
 │   │   ├── baseline_results.md
-│   │   ├── month_1_baseline_report.md
 │   │   ├── figures/
 │   │   └── tables/
 │   │
-│   ├── month_2/
-│   │   ├── modelling_report.md
-│   │   ├── error_analysis.md
-│   │   ├── explainability_report.md
-│   │   ├── figures/
-│   │   └── tables/
-│   │
-│   └── month_3/
-│       ├── production_readiness_report.md
-│       ├── load_test_report.md
-│       ├── monitoring_report.md
-│       ├── figures/
-│       └── tables/
+│   └── month_summaries/
+│       ├── month_1_baseline_report.md
+│       ├── month_2_modelling_report.md
+│       └── month_3_production_readiness_report.md
 │
 ├── artifacts/
 │   ├── models/
