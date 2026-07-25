@@ -187,6 +187,48 @@ def test_fetch_json_url_raises_non_retryable_http_error_without_secret(
     assert "secret-token" not in str(error.value)
 
 
+def test_fetch_json_url_retries_retryable_http_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"count": 0, "sleeps": []}
+
+    def fake_urlopen(request: object, timeout: float) -> FakeUrlopenResponse:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise HTTPError(
+                "https://example.test/resource.json",
+                503,
+                "Service Unavailable",
+                {},
+                io.BytesIO(b"try again later"),
+            )
+        return FakeUrlopenResponse(b'{"ok": true}')
+
+    def fake_sleep(seconds: int) -> None:
+        calls["sleeps"].append(seconds)
+
+    monkeypatch.setattr(api_client, "urlopen", fake_urlopen)
+    monkeypatch.setattr(api_client, "sleep", fake_sleep)
+
+    payload = api_client.fetch_json_url(
+        "https://example.test/resource.json",
+        timeout_seconds=12,
+        max_attempts=2,
+    )
+
+    assert payload == {"ok": True}
+    assert calls == {"count": 2, "sleeps": [1]}
+
+
+def test_fetch_json_url_rejects_non_positive_max_attempts() -> None:
+    with pytest.raises(ValueError, match="max_attempts must be at least 1"):
+        api_client.fetch_json_url(
+            "https://example.test/resource.json",
+            timeout_seconds=12,
+            max_attempts=0,
+        )
+
+
 def test_dns_fallback_runs_after_local_dns_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

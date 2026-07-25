@@ -299,5 +299,5 @@ def fetch_json_url(
 
     raise APIRequestError(
         f"Request to {host} failed after {max_attempts} attempts "
-        f"with timeout {timeout_seconds}."
+        f"with timeout {timeout_seconds}: {last_error}"
     ) from last_error
