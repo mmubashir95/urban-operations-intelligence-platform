@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(git status *)",
+      "Bash(git check-ignore *)",
+      "Bash(python3 -)",
+      "Bash(python3 -m pytest --version)",
+      "Bash(python3 -m ruff --version)",
+      "Bash(git show *)",
+      "Bash(xxd)",
+      "Bash(ps -o pid,etime,command -p 6272)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}
