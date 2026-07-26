@@ -284,6 +284,54 @@ def summarize_scope_date_range(
     }
 
 
+def summarize_monthly_stability(
+    monthly: pd.DataFrame,
+    *,
+    expected_month_count: int,
+    rate_column: str = "missed_target_rate",
+    volume_column: str = "eligible_target_count",
+    due_date_coverage_column: str = "due_date_coverage",
+    closed_date_coverage_column: str = "closed_date_coverage",
+    volatility_flag_threshold: float = 0.30,
+) -> dict[str, Any]:
+    """Measure month-to-month volatility, distinct from monthly continuity.
+
+    A candidate can have zero missing months (continuity) and still show
+    unstable target behaviour month to month. ``target_rate_volatility_flag``
+    surfaces that separately so a complete monthly sequence is never read as
+    evidence of stable target behaviour. The threshold is a configurable
+    Month-1 decision rule, not a universal constant.
+    """
+    volume = monthly[volume_column].astype(float) if volume_column in monthly else pd.Series(dtype="float64")
+    rate = monthly[rate_column].astype(float) if rate_column in monthly else pd.Series(dtype="float64")
+    due_coverage = monthly[due_date_coverage_column].astype(float) if due_date_coverage_column in monthly else pd.Series(dtype="float64")
+    closed_coverage = monthly[closed_date_coverage_column].astype(float) if closed_date_coverage_column in monthly else pd.Series(dtype="float64")
+
+    target_rate_range = float(rate.max() - rate.min()) if not rate.empty else 0.0
+    largest_change = float(rate.diff().abs().max()) if len(rate) > 1 else 0.0
+    if pd.isna(largest_change):
+        largest_change = 0.0
+
+    return {
+        "active_months": int(len(monthly)),
+        "missing_month_count": max(expected_month_count - len(monthly), 0),
+        "monthly_volume_coefficient_of_variation": (
+            safe_ratio(volume.std(ddof=0), volume.mean()) if not volume.empty else 0.0
+        ),
+        "minimum_monthly_eligible_volume": int(volume.min()) if not volume.empty else 0,
+        "maximum_monthly_eligible_volume": int(volume.max()) if not volume.empty else 0,
+        "target_rate_range": target_rate_range,
+        "largest_month_to_month_target_rate_change": largest_change,
+        "due_date_coverage_range": (
+            float(due_coverage.max() - due_coverage.min()) if not due_coverage.empty else 0.0
+        ),
+        "closed_date_coverage_range": (
+            float(closed_coverage.max() - closed_coverage.min()) if not closed_coverage.empty else 0.0
+        ),
+        "target_rate_volatility_flag": bool(target_rate_range >= volatility_flag_threshold),
+    }
+
+
 def build_rejection_reasons(row: Mapping[str, Any]) -> str:
     """Build stable, pipe-delimited agency rejection reasons from rule flags."""
     ordered_rules = [
@@ -335,6 +383,10 @@ def apply_agency_discovery_rules(
         result["passes_due_date_coverage"]
         & result["passes_closed_date_coverage"]
     )
+    # Currently identical to passes_eligible_volume; kept as a distinct named
+    # signal because "enough absolute target evidence" and "enough eligible
+    # volume" are conceptually separate questions that may diverge later
+    # (e.g. a minimum evaluable-pairs rule).
     result["has_target_evidence"] = result["passes_eligible_volume"]
     result["proceed_to_complaint_type_review"] = (
         result["has_target_evidence"]
@@ -717,6 +769,7 @@ def write_scope_decision(
     selected_complaint_types: Sequence[str],
     rejected_candidates: pd.DataFrame,
     extraction: Mapping[str, Any],
+    stability: Mapping[str, Any],
     limitations: Sequence[str],
 ) -> None:
     """Write the required modelling-scope decision document with computed values."""
@@ -727,7 +780,48 @@ def write_scope_decision(
     agency_due_date_coverage = float(
         decision.get("agency_wide_due_date_coverage", 0)
     )
+    evidence_start = decision.get("complaint_type_evidence_start_date", "the full analysis start date")
+    evidence_end = decision.get("complaint_type_evidence_end_date", "the latest complete month")
+    complaint_type_evidence_note = (
+        f"Complaint-type inclusion evidence covers the full analysis history "
+        f"({evidence_start} through {evidence_end}), which is wider than the selected "
+        "date range below; the final modelling population is limited further to that "
+        "narrower date range."
+    )
+
+    target_rate_range = float(stability.get("target_rate_range", 0.0))
+    largest_change = float(stability.get("largest_month_to_month_target_rate_change", 0.0))
+    volatility_flag = bool(stability.get("target_rate_volatility_flag", False))
+    if volatility_flag:
+        stability_note = (
+            f"The monthly missed-target rate varies substantially across the selected "
+            f"window (range {target_rate_range:.2%}, largest single-month change "
+            f"{largest_change:.2%}). Zero missing months establishes temporal "
+            "continuity only; it does not establish stable target behaviour. A "
+            "time-aware validation design and an explicit drift check are required "
+            "before modelling, and whether the full date range belongs in one "
+            "modelling population should be revisited in light of this variation."
+        )
+    else:
+        stability_note = (
+            "Monthly missed-target rate, coverage, and volume remain within a stable "
+            "range across the selected window."
+        )
+    limitations_effective = list(limitations)
+    if volatility_flag:
+        limitations_effective.append(
+            f"Monthly missed-target rate varies by {target_rate_range:.0%} across the "
+            "selected window (temporal continuity does not imply temporal stability); "
+            "a time-aware validation design and drift check are required before modelling."
+        )
+
     rejected_view = rejected_candidates.head(10).copy()
+    percentage_columns = ["due_date_coverage", "closed_date_coverage", "missed_target_rate", "scope_score"]
+    for column in percentage_columns:
+        if column in rejected_view.columns:
+            rejected_view[column] = pd.to_numeric(rejected_view[column], errors="coerce").map(
+                lambda value: f"{value:.2%}" if pd.notna(value) else ""
+            )
     content = f"""# Modelling Scope Decision
 
 ## Decision Status
@@ -787,6 +881,8 @@ Critical rules cover eligible volume, due-date and closure coverage, class balan
 
 {complaint_text}
 
+{complaint_type_evidence_note}
+
 ## Why This Scope Was Selected
 
 {agency} has only {agency_due_date_coverage:.2%} agency-wide due-date coverage
@@ -817,6 +913,14 @@ Records with non-null parseable `created_date`, `closed_date`, and `due_date`, m
 
 The current incomplete month was excluded from recommendation and monthly comparisons. The selected candidate covers {int(decision.get('active_months', 0))} active months with {int(decision.get('missing_month_count', 0))} missing months.
 
+- Monthly eligible-volume coefficient of variation: {float(stability.get('monthly_volume_coefficient_of_variation', 0)):.2f}
+- Monthly eligible volume range: {int(stability.get('minimum_monthly_eligible_volume', 0)):,} to {int(stability.get('maximum_monthly_eligible_volume', 0)):,}
+- Monthly missed-target rate range: {target_rate_range:.2%} (largest single-month change: {largest_change:.2%})
+- Monthly due-date coverage range: {float(stability.get('due_date_coverage_range', 0)):.2%}
+- Monthly closed-date coverage range: {float(stability.get('closed_date_coverage_range', 0)):.2%}
+
+{stability_note}
+
 ## Sensitivity Analysis
 
 The focused threshold analysis rebuilds the included complaint types and final
@@ -837,7 +941,7 @@ Rows without any required target timestamp are target-ineligible. The incomplete
 
 ## Known Limitations
 
-{chr(10).join(f'- {item}' for item in limitations)}
+{chr(10).join(f'- {item}' for item in limitations_effective)}
 
 ## Downstream Implications
 

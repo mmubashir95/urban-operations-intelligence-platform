@@ -28,6 +28,7 @@ from urban_ops.analysis.scope_selection import (  # noqa: E402
     evaluate_candidate_critical_gates,
     rebuild_scoped_sensitivity_candidate,
     score_scope_candidates,
+    summarize_monthly_stability,
     summarize_scope_date_range,
     validate_selected_scope_consistency,
     validate_scope_input,
@@ -211,10 +212,19 @@ def test_markdown_writer_includes_required_sections_and_values(tmp_path: Path) -
             "missed_target_rate": 0.25,
             "due_date_coverage": 0.1,
             "closed_date_coverage": 0.9,
+            "complaint_type_evidence_start_date": "2020-01-01",
+            "complaint_type_evidence_end_date": "2024-12-31",
         },
         selected_complaint_types=[],
-        rejected_candidates=pd.DataFrame([{"candidate_id": "C1", "rejection_reasons": "Low due-date coverage"}]),
+        rejected_candidates=pd.DataFrame(
+            [{"candidate_id": "C1", "due_date_coverage": 0.65, "rejection_reasons": "Low due-date coverage"}]
+        ),
         extraction={"dataset_id": "erm2-nwe9", "rows_represented": 5000},
+        stability={
+            "target_rate_range": 0.05,
+            "largest_month_to_month_target_rate_change": 0.02,
+            "target_rate_volatility_flag": False,
+        },
         limitations=["Expected-deadline coverage is insufficient."],
     )
 
@@ -247,6 +257,51 @@ def test_markdown_writer_includes_required_sections_and_values(tmp_path: Path) -
     assert all(f"## {section}" in content for section in required_sections)
     assert "DSNY" in content
     assert "1,200" in content
+    assert "65.00%" in content
+    assert "stable range" in content
+
+
+def test_markdown_writer_surfaces_volatility_as_a_limitation(tmp_path: Path) -> None:
+    """A volatile monthly target rate is disclosed in stability text and limitations."""
+    output_path = tmp_path / "scope_decision.md"
+    write_scope_decision(
+        output_path,
+        decision={
+            "decision_status": "Approved with limitations",
+            "selected_agency": "DSNY",
+            "selected_agency_name": "Department of Sanitation",
+            "selected_start_date": "2022-01-01",
+            "selected_end_date": "2026-06-30",
+            "eligible_target_records": 66_340,
+            "missed_target_count": 34_271,
+            "on_time_count": 32_069,
+            "missed_target_rate": 0.5166,
+            "due_date_coverage": 0.912,
+            "closed_date_coverage": 0.986,
+            "complaint_type_evidence_start_date": "2020-01-01",
+            "complaint_type_evidence_end_date": "2026-06-30",
+        },
+        selected_complaint_types=["Graffiti"],
+        rejected_candidates=pd.DataFrame(),
+        extraction={"dataset_id": "erm2-nwe9", "rows_represented": 5000},
+        stability={
+            "target_rate_range": 0.8559,
+            "largest_month_to_month_target_rate_change": 0.3582,
+            "monthly_volume_coefficient_of_variation": 0.4669,
+            "due_date_coverage_range": 0.1951,
+            "closed_date_coverage_range": 0.1518,
+            "minimum_monthly_eligible_volume": 325,
+            "maximum_monthly_eligible_volume": 3692,
+            "target_rate_volatility_flag": True,
+        },
+        limitations=["Expected-deadline coverage is insufficient."],
+    )
+
+    content = output_path.read_text(encoding="utf-8")
+    assert "varies substantially" in content
+    assert "85.59%" in content
+    assert "time-aware validation design" in content
+    assert "Monthly missed-target rate varies by 86%" in content
 
 
 def test_validation_reports_parse_duplicates_and_sequence_failures() -> None:
@@ -447,6 +502,66 @@ def test_sensitivity_rebuilds_included_types_and_candidate_feasibility() -> None
     assert feasible["passes_critical_gates"]
     assert infeasible["complaint_type_count"] == 0
     assert not infeasible["passes_critical_gates"]
+
+
+def test_monthly_stability_flags_volatile_target_rate_despite_full_continuity() -> None:
+    """Zero missing months does not suppress a large monthly target-rate swing."""
+    monthly = pd.DataFrame(
+        {
+            "eligible_target_count": [1000, 1000, 1000, 1000],
+            "missed_target_rate": [0.95, 0.90, 0.20, 0.15],
+            "due_date_coverage": [0.95, 0.80, 0.90, 0.85],
+            "closed_date_coverage": [0.99, 0.98, 0.97, 0.99],
+        }
+    )
+
+    stability = summarize_monthly_stability(monthly, expected_month_count=4)
+
+    assert stability["missing_month_count"] == 0
+    assert stability["target_rate_range"] == pytest.approx(0.80)
+    assert stability["largest_month_to_month_target_rate_change"] == pytest.approx(0.70)
+    assert stability["target_rate_volatility_flag"] is True
+
+
+def test_monthly_stability_is_stable_for_flat_rates() -> None:
+    """A near-constant monthly rate does not trip the volatility flag."""
+    monthly = pd.DataFrame(
+        {
+            "eligible_target_count": [500, 520, 480, 510],
+            "missed_target_rate": [0.50, 0.52, 0.49, 0.51],
+            "due_date_coverage": [0.90, 0.91, 0.90, 0.92],
+            "closed_date_coverage": [0.95, 0.96, 0.95, 0.96],
+        }
+    )
+
+    stability = summarize_monthly_stability(monthly, expected_month_count=4)
+
+    assert stability["target_rate_volatility_flag"] is False
+    assert 0 <= stability["target_rate_range"] <= 1
+
+
+def test_monthly_stability_handles_empty_and_single_row_input() -> None:
+    """An empty or single-month frame returns finite zero-volatility metrics."""
+    expected_columns = [
+        "eligible_target_count", "missed_target_rate", "due_date_coverage", "closed_date_coverage",
+    ]
+    empty = summarize_monthly_stability(pd.DataFrame(columns=expected_columns), expected_month_count=3)
+    assert empty["missing_month_count"] == 3
+    assert empty["target_rate_range"] == 0.0
+    assert empty["monthly_volume_coefficient_of_variation"] == 0.0
+    assert empty["target_rate_volatility_flag"] is False
+
+    single_row = pd.DataFrame(
+        {
+            "eligible_target_count": [100],
+            "missed_target_rate": [0.4],
+            "due_date_coverage": [0.9],
+            "closed_date_coverage": [0.95],
+        }
+    )
+    single = summarize_monthly_stability(single_row, expected_month_count=1)
+    assert single["missing_month_count"] == 0
+    assert single["largest_month_to_month_target_rate_change"] == 0.0
 
 
 def test_data_gates_with_semantic_limitations_are_conditionally_approved() -> None:

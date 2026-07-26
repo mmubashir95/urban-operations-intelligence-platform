@@ -28,7 +28,7 @@ Official NYC Open Data dataset `erm2-nwe9` at `https://data.cityofnewyork.us/res
 
 ## Extraction Summary
 
-- Extraction timestamp: 2026-07-26T04:37:44.092054+00:00
+- Extraction timestamp: 2026-07-26T17:22:05.446045+00:00
 - Requested period: 2020-01-01 through live snapshot
 - Aggregated records represented: 21,663,984
 - Latest available date: 2026-07-25T01:51:18+00:00
@@ -56,6 +56,8 @@ DSNY — Department of Sanitation
 ## Selected Complaint Types
 
 Graffiti
+
+Complaint-type inclusion evidence covers the full analysis history (2020-01-01 through 2026-06-30), which is wider than the selected date range below; the final modelling population is limited further to that narrower date range.
 
 ## Why This Scope Was Selected
 
@@ -87,6 +89,14 @@ Records with non-null parseable `created_date`, `closed_date`, and `due_date`, m
 
 The current incomplete month was excluded from recommendation and monthly comparisons. The selected candidate covers 54 active months with 0 missing months.
 
+- Monthly eligible-volume coefficient of variation: 0.47
+- Monthly eligible volume range: 325 to 3,692
+- Monthly missed-target rate range: 85.59% (largest single-month change: 35.82%)
+- Monthly due-date coverage range: 19.51%
+- Monthly closed-date coverage range: 15.18%
+
+The monthly missed-target rate varies substantially across the selected window (range 85.59%, largest single-month change 35.82%). Zero missing months establishes temporal continuity only; it does not establish stable target behaviour. A time-aware validation design and an explicit drift check are required before modelling, and whether the full date range belongs in one modelling population should be revisited in light of this variation.
+
 ## Sensitivity Analysis
 
 The focused threshold analysis rebuilds the included complaint types and final
@@ -105,10 +115,10 @@ Rows without any required target timestamp are target-ineligible. The incomplete
 
 | candidate_id | candidate_name | agency | date_range | complaint_type_count | eligible_target_count | due_date_coverage | closed_date_coverage | missed_target_rate | decision | rejection_reasons | scope_score |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| C5 | Recent complete calendar years | DSNY | 2022-01-01 to 2025-12-31 | 1 | 60281 | 0.9108137736330736 | 0.9943686083705006 | 0.533451668021433 | Rejected alternative | Lower scope score than selected feasible candidate | 0.9054731416736128 |
-| C1 | Full available period | DSNY | 2020-01-01 to 2026-06-30 | 1 | 74519 | 0.9124660756287317 | 0.9862493215125746 | 0.5660972369462821 | Rejected alternative | Lower scope score than selected feasible candidate | 0.8973159092360414 |
-| C3 | Recent 4-year period | DSNY | 2023-01-01 to 2026-06-30 | 1 | 54486 | 0.9103692995137337 | 0.984656328032593 | 0.4275593730499578 | Rejected alternative | Lower scope score than selected feasible candidate | 0.890390481183796 |
-| C4 | Recent 3-year period | DSNY | 2024-01-01 to 2026-06-30 | 1 | 42025 | 0.908242908814011 | 0.980603676206189 | 0.4242712671029149 | Rejected alternative | Lower scope score than selected feasible candidate | 0.8845715254119572 |
+| C5 | Recent complete calendar years (48 months: 2022-01 to 2025-12) | DSNY | 2022-01-01 to 2025-12-31 | 1 | 60281 | 91.08% | 99.44% | 53.35% | Rejected alternative | Lower scope score than selected feasible candidate | 90.55% |
+| C1 | Full available period (78 months: 2020-01 to 2026-06) | DSNY | 2020-01-01 to 2026-06-30 | 1 | 74519 | 91.25% | 98.62% | 56.61% | Rejected alternative | Lower scope score than selected feasible candidate | 89.73% |
+| C3 | Recent 4-year period (42 months: 2023-01 to 2026-06) | DSNY | 2023-01-01 to 2026-06-30 | 1 | 54486 | 91.04% | 98.47% | 42.76% | Rejected alternative | Lower scope score than selected feasible candidate | 89.04% |
+| C4 | Recent 3-year period (30 months: 2024-01 to 2026-06) | DSNY | 2024-01-01 to 2026-06-30 | 1 | 42025 | 90.82% | 98.06% | 42.43% | Rejected alternative | Lower scope score than selected feasible candidate | 88.46% |
 
 ## Known Limitations
 
@@ -118,6 +128,7 @@ Rows without any required target timestamp are target-ineligible. The incomplete
 - Status eligibility and cancelled/duplicate complaint treatment remain to be approved.
 - A scoped row-level extraction must validate identifiers, parsing, chronology, target construction, and status distributions before modelling.
 - Operational relevance has no objective repository-backed measure and is scored neutrally.
+- Monthly missed-target rate varies by 86% across the selected window (temporal continuity does not imply temporal stability); a time-aware validation design and drift check are required before modelling.
 
 ## Downstream Implications
 
