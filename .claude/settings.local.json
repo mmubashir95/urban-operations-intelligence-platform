@@ -11,7 +11,9 @@
       "Bash(xxd)",
       "Bash(ps -o pid,etime,command -p 6272)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(python3 -m pytest tests/unit/analysis/test_scope_selection.py -q)",
+      "Bash(python3 -m pytest tests/unit/data/test_api_client.py -q)"
     ]
   }
 }
