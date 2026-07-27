@@ -16,11 +16,20 @@ as applying to all DSNY complaints or all NYC 311 complaints.
 - End date: 2025-12-31
 - Target: `missed_resolution_target`
 - Target rule: `closed_date > due_date`
-- Extraction timestamp: 2026-07-27T16:11:48.990667+00:00
+- Extraction timestamp: 2026-07-27T16:41:16.401819+00:00
 - Source: NYC Open Data dataset `erm2-nwe9`
 
 The live source can change. Counts below describe this extraction snapshot and
 must be recomputed by the notebooks for a later snapshot.
+
+## Decision Authority
+
+Notebook 04's general scorecard establishes candidate feasibility; its
+`scope_score` does not select the final date range. Notebook 05 is the
+authoritative volatility-aware temporal decision because it additionally
+evaluates outcome maturity, complete-calendar-year boundaries, and recent
+relevance. Notebook 04 reconciles its candidate table to the single selected
+Notebook 05 artifact and fails if identifiers, dates, counts, or rates disagree.
 
 ## Selected-Scope Statistics
 
@@ -146,8 +155,11 @@ thresholds are lower and prevent unconditional approval.
 - Cancelled and duplicate complaint eligibility remains a governance decision.
 - `complaint_type` is constant in this narrow population and is not useful as a
   varying model feature.
-- Descriptor shifts are observational regime evidence, not proof of an
-  operational cause.
+- The analysed `descriptor` field remained constant (`Graffiti`, 100% of rows)
+  across the evaluated years and therefore does not explain the temporal
+  change. The possible regime signal is supported by changes in missed-target
+  rate, coverage, and complaint volume. The available data does not establish
+  the underlying operational cause.
 
 ## Downstream Requirements
 
