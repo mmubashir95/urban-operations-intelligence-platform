@@ -16,7 +16,7 @@ as applying to all DSNY complaints or all NYC 311 complaints.
 - End date: 2025-12-31
 - Target: `missed_resolution_target`
 - Target rule: `closed_date > due_date`
-- Extraction timestamp: 2026-07-27T16:41:16.401819+00:00
+- Extraction timestamp: 2026-07-27T17:04:43.549384+00:00
 - Source: NYC Open Data dataset `erm2-nwe9`
 
 The live source can change. Counts below describe this extraction snapshot and

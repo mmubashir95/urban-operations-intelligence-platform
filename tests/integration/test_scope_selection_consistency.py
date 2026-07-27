@@ -159,6 +159,34 @@ def test_temporal_candidate_metrics_must_match_selected_summary() -> None:
         )
 
 
+def test_zero_selected_temporal_rows_are_rejected() -> None:
+    candidates = temporal_candidates()
+    candidates["selected"] = False
+
+    with pytest.raises(ValueError, match="exactly one selected row"):
+        reconcile_final_scope(
+            general_candidates(),
+            candidates,
+            selected_summary(),
+            selected_complaint_types=["Graffiti"],
+        )
+
+
+def test_multiple_matching_general_candidates_are_rejected() -> None:
+    duplicated_row = general_candidates().iloc[[1]]
+    candidates = pd.concat(
+        [general_candidates(), duplicated_row], ignore_index=True
+    )
+
+    with pytest.raises(ValueError, match="exactly one candidate"):
+        reconcile_final_scope(
+            candidates,
+            temporal_candidates(),
+            selected_summary(),
+            selected_complaint_types=["Graffiti"],
+        )
+
+
 def test_report_outputs_compare_counts_rates_and_snapshot() -> None:
     report_04 = selected_summary()
     report_05 = selected_summary()
@@ -185,3 +213,29 @@ def test_report_output_mismatch_is_rejected(column: str, replacement: object) ->
 
     with pytest.raises(ValueError, match="mismatch"):
         validate_selected_scope_outputs(report_04, report_05)
+
+
+def test_committed_reports_reconcile() -> None:
+    """Regression check against the repository's own generated report snapshot.
+
+    reports/ is gitignored build output, so this test skips (rather than
+    fails) when the notebooks have not yet been executed locally.
+    """
+    report_04_path = (
+        PROJECT_ROOT / "reports" / "04_scope_selection" / "tables"
+        / "selected_scope_summary.csv"
+    )
+    report_05_path = (
+        PROJECT_ROOT / "reports" / "05_temporal_stability" / "tables"
+        / "selected_scope_summary.csv"
+    )
+    if not report_04_path.is_file() or not report_05_path.is_file():
+        pytest.skip(
+            "Generated reports are not present; run the Month 1 notebooks "
+            "(05 then 04) to produce reports/ before this test can compare "
+            "the real artifacts."
+        )
+
+    validate_selected_scope_outputs(
+        pd.read_csv(report_04_path), pd.read_csv(report_05_path)
+    )
