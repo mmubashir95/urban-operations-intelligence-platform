@@ -13,7 +13,11 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(python3 -m pytest tests/unit/analysis/test_scope_selection.py -q)",
-      "Bash(python3 -m pytest tests/unit/data/test_api_client.py -q)"
+      "Bash(python3 -m pytest tests/unit/data/test_api_client.py -q)",
+      "Bash(echo \"working-tree diff --check exit=$?\")",
+      "Bash(echo \"commit-range diff --check exit=$?\")",
+      "Bash(xargs -I{} sh -c 'echo \"{}: $\\(grep -c \"^def test_\\\\|^    def test_\" {}\\)\"')",
+      "Bash(echo \"reports diff vs HEAD exit=$?\")"
     ]
   }
 }
