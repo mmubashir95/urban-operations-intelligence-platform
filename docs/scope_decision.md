@@ -2,149 +2,165 @@
 
 ## Decision Status
 
-**Approved with limitations**
+**APPROVED_WITH_LIMITATIONS**
 
-## Executive Summary
-
-The API-backed comparison produced status **Approved with limitations** for the narrow selected
-population. Data-scope feasibility is established separately from final target
-governance.
-
-## Business Problem
-
-Predict whether a newly created NYC 311 complaint will miss its expected resolution target.
-
-## Prediction Target
-
-`missed_resolution_target`: 1 when `closed_date > due_date`, otherwise 0, only for target-eligible historical records.
-
-## Target Definition Reference
-
-The eligibility and label rules match `notebooks/03_target_feasibility.ipynb` and `docs/target_definition_draft.md`.
-
-## Data Source
-
-Official NYC Open Data dataset `erm2-nwe9` at `https://data.cityofnewyork.us/resource/erm2-nwe9.json`.
-
-## Extraction Summary
-
-- Extraction timestamp: 2026-07-26T17:22:05.446045+00:00
-- Requested period: 2020-01-01 through live snapshot
-- Aggregated records represented: 21,663,984
-- Latest available date: 2026-07-25T01:51:18+00:00
-- Latest complete month: 2026-06
-
-## Selection Criteria
-
-Critical rules cover eligible volume, due-date and closure coverage, class balance, temporal continuity, and measurable timestamp consistency. Score weights are 30%, 20%, 15%, 15%, 10%, and 10% respectively; scoring does not override failed critical gates.
-
-## Selected Agency
-
-DSNY — Department of Sanitation
+Month 1 — Step 3 is finalised for a narrow modelling population. The model
+scope applies to **DSNY Graffiti complaints only**. It must not be interpreted
+as applying to all DSNY complaints or all NYC 311 complaints.
 
 ## Selected Scope
 
-- Agency: DSNY
-- Agency name: Department of Sanitation
-- Complaint types: Graffiti
-- Date range: 2022-01-01 through 2026-06-30
+- Agency: DSNY — Department of Sanitation
+- Complaint type: Graffiti
+- Start date: 2024-01-01
+- End date: 2025-12-31
+- Target: `missed_resolution_target`
+- Target rule: `closed_date > due_date`
+- Extraction timestamp: 2026-07-27T16:11:48.990667+00:00
+- Source: NYC Open Data dataset `erm2-nwe9`
 
-## Selected Date Range
+The live source can change. Counts below describe this extraction snapshot and
+must be recomputed by the notebooks for a later snapshot.
 
-2022-01-01 through 2026-06-30.
+## Selected-Scope Statistics
 
-## Selected Complaint Types
+- Total records: 40,017
+- Outcome-mature target-eligible records: 35,966 (89.88%)
+- Missed complaints: 15,716
+- On-time complaints: 20,250
+- Missed-target rate: 43.70%
+- Due-date coverage: 90.55%
+- Closed-date coverage: 99.32%
+- Active months: 24
+- Expected months: 24
+- Missing months: 0
+- Outcome-maturity rate among records with a due date: 100.00%
+- Mature open complaints excluded from label construction: 270
+- Invalid timestamp-sequence rate: 0.0150%
 
-Graffiti
+Small differences from earlier reports are expected when the live extraction
+timestamp changes. The selected complete-calendar period itself had no
+outcome-immature due dates in this snapshot.
 
-Complaint-type inclusion evidence covers the full analysis history (2020-01-01 through 2026-06-30), which is wider than the selected date range below; the final modelling population is limited further to that narrower date range.
+## Outcome-Maturity Rule
 
-## Why This Scope Was Selected
+`outcome_mature = due_date.notna() & (due_date <= extraction_timestamp)`.
+Target evidence additionally requires non-null, parseable `created_date`,
+`closed_date`, and `due_date`. Therefore an open complaint is excluded from
+scope-selection labels and deferred; it is not silently classified as on time
+or late. Records with due dates after extraction are also excluded from
+eligible evidence.
 
-DSNY has only 3.09% agency-wide due-date coverage
-because most of its complaint types do not use this field. The selected
-complaint-type population is sufficiently large, temporally continuous, and
-target-feasible, with strong due-date and closure coverage. The initial model
-is therefore complaint-type-specific and is not intended to generalise to all
-DSNY service requests.
+## Temporal Continuity
 
-## Eligible Population
-
-Records with non-null parseable `created_date`, `closed_date`, and `due_date`, matching Notebook 03. Ineligible records retain a null target.
-
-## Target Distribution
-
-- Eligible records: 66,340
-- Missed: 34,271
-- On time: 32,069
-- Missed-target rate: 51.66%
-
-## Data Quality Summary
-
-- Due-date coverage: 91.20%
-- Closed-date coverage: 98.62%
-- Eligibility rate: 89.83%
+Every expected month in the selected period contains eligible records. This
+establishes continuity only. Zero missing months is not evidence of stable
+target behaviour.
 
 ## Temporal Stability
 
-The current incomplete month was excluded from recommendation and monthly comparisons. The selected candidate covers 54 active months with 0 missing months.
+For the selected period:
 
-- Monthly eligible-volume coefficient of variation: 0.47
-- Monthly eligible volume range: 325 to 3,692
-- Monthly missed-target rate range: 85.59% (largest single-month change: 35.82%)
-- Monthly due-date coverage range: 19.51%
-- Monthly closed-date coverage range: 15.18%
+- Monthly eligible-volume range: 1,219 to 2,367
+- Mean monthly eligible volume: 1,498.58
+- Monthly volume standard deviation: 252.25
+- Monthly volume coefficient of variation: 0.1683
+- Monthly missed-target-rate range: 30.23 percentage points
+- Monthly target-rate standard deviation: 7.62 percentage points
+- Largest absolute month-to-month rate change: 21.56 percentage points
+- Yearly missed-target rate: 44.12% in 2024 and 43.19% in 2025
 
-The monthly missed-target rate varies substantially across the selected window (range 85.59%, largest single-month change 35.82%). Zero missing months establishes temporal continuity only; it does not establish stable target behaviour. A time-aware validation design and an explicit drift check are required before modelling, and whether the full date range belongs in one modelling population should be revisited in light of this variation.
+The range and largest monthly change cross the configured warning thresholds,
+but not the severe thresholds. The data indicates a possible operational or
+data-generation regime change across the wider history. The available dataset
+does not establish the underlying cause.
 
-## Sensitivity Analysis
+## Candidate-Period Comparison
 
-The focused threshold analysis rebuilds the included complaint types and final
-candidate for each threshold or date-range scenario. Agency-wide due-date
-coverage remains diagnostic and does not veto a qualifying scoped population.
+| Candidate | Eligible | Target rate | Closed coverage | Target-rate range | Rate std. dev. | Volume CV | Decision |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 2022-01-01–2026-06-30 | 66,290 | 51.70% | 98.62% | 84.78% | 24.13% | 0.4674 | REQUIRES_NARROWER_RANGE |
+| 2022-01-01–2025-12-31 | 60,281 | 53.35% | 99.44% | 72.36% | 24.27% | 0.4771 | REQUIRES_NARROWER_RANGE |
+| 2023-01-01–2026-06-30 | 54,436 | 42.80% | 98.47% | 59.04% | 11.01% | 0.3011 | REQUIRES_NARROWER_RANGE |
+| 2023-01-01–2025-12-31 | 48,427 | 43.74% | 99.46% | 46.62% | 10.66% | 0.2929 | APPROVED_WITH_LIMITATIONS |
+| 2024-01-01–2026-06-30 | 41,975 | 42.48% | 98.07% | 45.93% | 8.67% | 0.2226 | APPROVED_WITH_LIMITATIONS |
+| **2024-01-01–2025-12-31** | **35,966** | **43.70%** | **99.32%** | **30.23%** | **7.62%** | **0.1683** | **SELECTED — APPROVED_WITH_LIMITATIONS** |
 
-## Included Records
+The exact machine-readable comparison, thresholds, and maturity counts are in
+`reports/05_temporal_stability/tables/temporal_stability_summary.csv`.
 
-73,851 records are represented by the selected scope; 66,340 can receive the target.
+## Final Selection Rationale
 
-## Exclusion Rules
+The selected range retains two recent complete calendar years, more than
+35,000 eligible records, both target classes, full monthly continuity, strong
+coverage, and the best stability of the required candidates. It is preferred
+to the longer ranges because 2022 contributes a markedly different target
+regime and 2026 is an incomplete calendar year with weaker closure completeness
+and 61 due dates that were still after the extraction timestamp.
 
-Rows without any required target timestamp are target-ineligible. The incomplete current month is excluded from stability and final date-range decisions. No status-only proxy target is used.
+The 2023–2025 range was rejected because its target-rate range and standard
+deviation are materially higher. The 2024–2026 range was rejected because it
+adds an incomplete recent year and weaker outcome observation without improving
+stability. No range shorter than two complete calendar years was added: it
+would reduce seasonal representation below the configured rule and is not
+needed to achieve a non-severe candidate.
+
+## Agency and Complaint-Type Feasibility
+
+Agency screening is diagnostic and does not veto a viable subgroup merely
+because other complaint types lack due dates. DSNY Graffiti independently
+passes the complaint-type volume, coverage, target-balance, continuity, recent
+activity, and timestamp-consistency gates. This corrects the misleading
+agency-wide veto interpretation while preserving agency-wide evidence.
 
 ## Rejected Alternatives
 
-| candidate_id | candidate_name | agency | date_range | complaint_type_count | eligible_target_count | due_date_coverage | closed_date_coverage | missed_target_rate | decision | rejection_reasons | scope_score |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| C5 | Recent complete calendar years (48 months: 2022-01 to 2025-12) | DSNY | 2022-01-01 to 2025-12-31 | 1 | 60281 | 91.08% | 99.44% | 53.35% | Rejected alternative | Lower scope score than selected feasible candidate | 90.55% |
-| C1 | Full available period (78 months: 2020-01 to 2026-06) | DSNY | 2020-01-01 to 2026-06-30 | 1 | 74519 | 91.25% | 98.62% | 56.61% | Rejected alternative | Lower scope score than selected feasible candidate | 89.73% |
-| C3 | Recent 4-year period (42 months: 2023-01 to 2026-06) | DSNY | 2023-01-01 to 2026-06-30 | 1 | 54486 | 91.04% | 98.47% | 42.76% | Rejected alternative | Lower scope score than selected feasible candidate | 89.04% |
-| C4 | Recent 3-year period (30 months: 2024-01 to 2026-06) | DSNY | 2024-01-01 to 2026-06-30 | 1 | 42025 | 90.82% | 98.06% | 42.43% | Rejected alternative | Lower scope score than selected feasible candidate | 88.46% |
+- **DOT:** rejected. Due-date coverage is 0% and target-eligible records are 0.
+  DOT remains useful historical target-feasibility evidence, but it is not the
+  selected scope.
+- **All DSNY complaints:** rejected. Most DSNY complaint types do not provide
+  the deadline field required by this target.
+- **All NYC 311 complaints:** rejected. Target-field meaning and coverage are
+  not sufficiently uniform across agencies and complaint types.
+- **Longer DSNY Graffiti ranges:** rejected or required to narrow for the
+  temporal reasons reported above.
+
+## Decision Thresholds
+
+Thresholds are centralised in
+`urban_ops.analysis.temporal_stability.TemporalStabilityThresholds`. Core
+rules require at least 10,000 eligible records, 70% due-date coverage, 80%
+closed-date coverage, both classes (5%–95% target rate), 24 active continuous
+months, at least 250 eligible records per month, two complete calendar years,
+98% outcome maturity, and no more than 5% invalid timestamp sequences. Severe
+volatility is flagged at a 50-point rate range, 15-point monthly rate standard
+deviation, 25-point largest monthly change, or 0.60 volume CV. Warning
+thresholds are lower and prevent unconditional approval.
 
 ## Known Limitations
 
-- The initial scope contains one complaint type, so complaint_type is constant and cannot be a varying model feature.
-- The business meaning and creation-time semantics of due_date require confirmation.
-- Prediction-time availability and post-creation changes to due_date require confirmation.
-- Status eligibility and cancelled/duplicate complaint treatment remain to be approved.
-- A scoped row-level extraction must validate identifiers, parsing, chronology, target construction, and status distributions before modelling.
-- Operational relevance has no objective repository-backed measure and is scored neutrally.
-- Monthly missed-target rate varies by 86% across the selected window (temporal continuity does not imply temporal stability); a time-aware validation design and drift check are required before modelling.
+- Monthly target behaviour is improved but not stationary; the selected range
+  still triggers a volatility warning.
+- The business meaning, creation-time availability, and mutability of
+  `due_date` require confirmation. It must not be assumed to be a safe feature.
+- Cancelled and duplicate complaint eligibility remains a governance decision.
+- `complaint_type` is constant in this narrow population and is not useful as a
+  varying model feature.
+- Descriptor shifts are observational regime evidence, not proof of an
+  operational cause.
 
-## Downstream Implications
+## Downstream Requirements
 
-Before modelling, retrieve the selected agency, complaint types, and date range
-at row level. Validate identifier uniqueness, conflicting duplicates, timestamp
-parsing, creation-to-due and creation-to-closure chronology, target
-construction, status distribution, cancelled and duplicate treatment,
-prediction-time availability of `due_date`, and whether `due_date` changes
-after creation. Because this scope contains one complaint type,
-`complaint_type` is constant and is not useful as a varying initial-model
-feature.
+- Use chronological evaluation; do not randomly split this time-dependent
+  population.
+- Report performance by month and year, run explicit drift checks, and reassess
+  the scope if target prevalence or field coverage changes.
+- Use `closed_date`, final status, resolution descriptions, actual duration,
+  resolution-action timestamps, and other post-creation updates only for
+  feasibility or label construction, never as creation-time features.
+- Confirm `due_date` availability and immutability at prediction time before
+  any feature use.
+- Preserve the outcome-maturity cutoff when rebuilding labels.
 
-## Reproducibility Information
-
-Generated by `notebooks/04_scope_selection.ipynb` from deterministic server-side API aggregations ordered by stable grouping keys.
-
-## Approval Status
-
-Approved with limitations. No model is trained and no train/validation/test split is created in this analysis.
+No model is trained and no train/validation/test split is created in this
+scope-selection work.
