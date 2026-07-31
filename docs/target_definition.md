@@ -1,89 +1,72 @@
 # Target Definition
 
-## Status and Source of Truth
+## Status and selected scope
 
-This document is the source of truth for Month 1 target governance. The target
-is approved for feasibility analysis and downstream modelling preparation only
-within the selected DSNY Graffiti scope, with the limitations below.
+This is the authoritative Month 1 target contract. The machine-readable scope
+is loaded from `reports/05_temporal_stability/tables/selected_scope_summary.csv`;
+the values currently resolve to DSNY / Graffiti, 2024-01-01 through 2025-12-31
+inclusive. Counts are snapshot evidence, not hardcoded source truth.
 
-## Target
+The prediction is generated immediately after complaint creation using only
+information available then.
+
+## Target contract
 
 - Name: `missed_resolution_target`
-- Prediction moment: shortly after complaint creation
-- Positive class: complaint closed after its expected due date
-- Negative class: complaint closed on or before its expected due date
+- Formula: `closed_date > due_date`
+- `1`: complaint closed after its due date
+- `0`: complaint closed on or before its due date
+- Equality: `closed_date == due_date` is target `0`
+- Dtype: nullable `Int8`
+- Ineligible rows: `pd.NA`, never `0`
+- Target inputs: `closed_date` and `due_date`
 
-```python
-outcome_mature = due_date.notna() & (due_date <= extraction_timestamp)
-eligible_for_target = (
-    created_date.notna()
-    & closed_date.notna()
-    & due_date.notna()
-    & outcome_mature
-)
-missed_resolution_target = (closed_date > due_date).astype("int8")
-```
+## Eligibility
 
-The comparison is strictly `>`: closure exactly at the due date is on time.
-The formula has not been changed from the established target definition;
-outcome maturity is an additional observation-window eligibility requirement.
+A record is eligible only when it is within the selected agency, complaint
+type, and inclusive created-date interval; has parseable `created_date`,
+`due_date`, and `closed_date`; satisfies `due_date >= created_date` and
+`closed_date >= created_date`; has normalized status `closed`; has a mature
+outcome; and is the unambiguous canonical record for its complaint ID.
 
-## Final Scope
+`outcome_mature = due_date.notna() & (due_date <= extraction_timestamp)`.
+Maturity does not by itself make a row eligible.
 
-- Agency: DSNY
-- Complaint type: Graffiti
-- Created-date range: 2024-01-01 through 2025-12-31, inclusive
+Open complaints remain ineligible and unlabeled even after the due date.
+Cancelled complaints are excluded because cancellation is not approved as a
+successful operational resolution. Other non-closed and unknown statuses are
+also excluded. Approved status: `closed`. Explicitly excluded statuses include
+`assigned`, `cancelled`, `duplicate`, `open`, `pending`, and `started`.
 
-The target and model scope do not generalise to all DSNY or NYC 311 records.
-See `docs/scope_decision.md` for snapshot metrics and candidate comparison.
+Exact duplicate rows keep one deterministic canonical record. Redundant rows
+are marked and excluded. When a complaint ID has conflicting target inputs,
+status, or scope values, every member is excluded as
+`conflicting_duplicate_unique_key`.
 
-## Eligibility and Open Complaints
+## Exclusion precedence
 
-Required fields are `unique_key`, `created_date`, `closed_date`, `due_date`,
-`agency`, `complaint_type`, and `status`. Timestamps must be parseable and are
-normalised to UTC for comparison. Source nulls remain null; no timestamp is
-imputed.
+The canonical order is:
 
-Open complaints without `closed_date` are excluded from historical label
-construction and reported separately. They are not inferred to be on time or
-late from status. Complaints whose due date is later than the extraction
-timestamp are outcome-immature and deferred.
+`outside_selected_scope, missing_created_date, missing_due_date, missing_closed_date, due_before_created, closed_before_created, excluded_status, conflicting_duplicate_unique_key, exact_duplicate_unique_key, outcome_not_mature, eligible`
 
-## Historical DOT Evidence
+Individual flags are retained even when another failure wins precedence.
 
-DOT was evaluated first and rejected, not silently removed. Its due-date
-coverage was 0% and it had zero target-eligible records, so this target could
-not be constructed for the DOT extract. The DOT investigation also observed a
-separate closure-before-creation chronology concern. DOT is not the selected
-scope and its infeasibility does not veto the independently feasible DSNY
-Graffiti subgroup.
+## Leakage and limitations
 
-The detailed historical snapshot remains in
-`reports/03_target_feasibility/` and `notebooks/03_target_feasibility.ipynb`.
+The target inputs, final status, resolution fields, eligibility fields, and
+target-derived fields are not creation-time model features. `due_date` is
+approved for target construction only; its creation-time availability,
+business semantics, source versioning, and mutability are not proven.
 
-## Invalid Substitutes
+The selected population still has temporal-volatility limitations documented
+in `docs/scope_decision.md`. Rebuild labels from the current selected
+population and extraction timestamp rather than reusing historic counts.
 
-Final status, a missing closure date, arbitrary resolution-duration cutoffs,
-`resolution_action_updated_date`, and `resolution_description` are not valid
-substitutes for the expected due-date target.
+## Source of truth
 
-## Leakage Boundary
-
-`closed_date`, final status, `resolution_description`,
-`resolution_action_updated_date`, actual resolution duration, and other
-post-creation updates may be used only for feasibility analysis or label
-construction. They must not be model features at the creation-time prediction
-moment.
-
-`due_date` is necessary for label construction, but its availability and
-mutability at prediction time have not been proven. It must not be treated as a
-safe feature until that operational contract is confirmed.
-
-## Remaining Governance Limitations
-
-- Confirm the business semantics and lifecycle of DSNY Graffiti `due_date`.
-- Confirm creation-time availability and whether due dates can later change.
-- Approve explicit cancelled and duplicate complaint eligibility rules.
-- Preserve the extraction-time outcome-maturity cutoff in every label build.
-- Reassess this contract if coverage, category definitions, or target prevalence
-  drifts materially.
+- Scope loading: `urban_ops.data.selected_scope`
+- Eligibility and precedence: `urban_ops.features.eligibility`
+- Target formula and dtype: `urban_ops.features.target`
+- Reports: `urban_ops.analysis.target_and_leakage`
+- Leakage roles: `urban_ops.features.feature_roles`
+- Enforcement: `urban_ops.features.leakage`
