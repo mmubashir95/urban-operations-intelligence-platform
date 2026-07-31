@@ -82,3 +82,53 @@ silently overwritten. The query and ordering are deterministic and every run
 stores its own provenance, but NYC Open Data is live and may receive historical
 corrections. The saved raw extraction is the immutable downstream source for
 that snapshot.
+
+## Step 6: raw data validation
+
+Step 6 finds, measures, and reports data-quality issues in the latest successful
+Step 5 extraction. It does not clean records. In particular, it never rewrites
+`service_requests.parquet`, fills missing values, standardizes saved categories,
+removes duplicates, creates a target, or writes a cleaned dataset.
+
+Run the default validation threshold:
+
+```bash
+make validate-resolution-risk
+```
+
+The equivalent direct command is:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m urban_ops.validation.pipeline \
+  --config configs/data/validation_rules.yaml
+```
+
+The command locates the latest run whose validated `metadata.json` has
+`completion_status: success`; it does not select a directory by timestamp
+alone. Reports are written to `reports/08_data_validation/`. The main evidence
+is `validation_summary.md` plus the CSV tables for schema, scope, missingness,
+timestamps, chronology, duplicates, categories, status, geography, provisional
+target readiness, severities, and proposed Step 7 actions.
+
+Socrata timestamp strings without an explicit offset are interpreted as UTC in
+temporary validation views. Raw timestamp strings are preserved unchanged, and
+timezone-naive versus timezone-aware counts are reported separately.
+
+The default command exits non-zero only for `CRITICAL` findings, meaning the raw
+run cannot safely proceed to cleaning. `ERROR` findings require an explicit
+cleaning rule, `WARNING` findings may affect later modelling, and `INFO` findings
+are profiles or expected conditions. Use `--fail-on-error` through
+`make validate-resolution-risk-strict`, or pass `--fail-on-warning` directly,
+for stricter automation.
+
+Validation and cleaning are deliberately separate:
+
+- Validation finds, measures, and reports issues.
+- Cleaning applies approved corrections in Step 7.
+
+Execute the evidence notebook after validation with:
+
+```bash
+.venv/bin/jupyter nbconvert --to notebook --execute notebooks/07_data_validation.ipynb \
+  --inplace --ExecutePreprocessor.timeout=600
+```

@@ -1,0 +1,73 @@
+input:
+  raw_root: "data/raw/nyc_311"
+  expected_dataset_id: "erm2-nwe9"
+  supported_format: "parquet"
+  scope_authority_file: "reports/05_temporal_stability/tables/selected_scope_summary.csv"
+  scope_extraction_metadata_file: "reports/05_temporal_stability/tables/extraction_metadata.csv"
+
+output:
+  report_root: "reports/08_data_validation"
+
+schema:
+  require_column_order: true
+  required_columns:
+    - unique_key
+    - created_date
+    - closed_date
+    - due_date
+    - agency
+    - agency_name
+    - complaint_type
+    - descriptor
+    - descriptor_2
+    - status
+    - borough
+    - incident_zip
+    - latitude
+    - longitude
+    - location_type
+    - open_data_channel_type
+    - resolution_description
+    - resolution_action_updated_date
+
+timestamps:
+  columns:
+    - created_date
+    - closed_date
+    - due_date
+    - resolution_action_updated_date
+  timezone: "UTC"
+
+categories:
+  columns:
+    - agency
+    - agency_name
+    - complaint_type
+    - descriptor
+    - descriptor_2
+    - status
+    - borough
+    - location_type
+    - open_data_channel_type
+  rare_category_max_rows: 10
+  high_cardinality_threshold: 1000
+  maximum_profile_values_per_column: 5000
+
+geography:
+  latitude_valid_range: [-90.0, 90.0]
+  longitude_valid_range: [-180.0, 180.0]
+  nyc_bounding_box:
+    min_latitude: 40.40
+    max_latitude: 41.00
+    min_longitude: -74.30
+    max_longitude: -73.60
+
+missingness:
+  null_like_strings:
+    - ""
+    - "null"
+    - "none"
+    - "nan"
+    - "n/a"
+    - "na"
+    - "unknown"
