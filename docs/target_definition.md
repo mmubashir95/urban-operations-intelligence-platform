@@ -34,9 +34,12 @@ Maturity does not by itself make a row eligible.
 
 Open complaints remain ineligible and unlabeled even after the due date.
 Cancelled complaints are excluded because cancellation is not approved as a
-successful operational resolution. Other non-closed and unknown statuses are
-also excluded. Approved status: `closed`. Explicitly excluded statuses include
-`assigned`, `cancelled`, `duplicate`, `open`, `pending`, and `started`.
+successful operational resolution. Approved status: `closed`. Explicitly
+excluded statuses include `assigned`, `cancelled`, `duplicate`, `open`,
+`pending`, and `started`. Any non-null status outside both the approved and
+explicitly-excluded sets is genuinely unrecognized and causes
+`evaluate_target_eligibility` to raise, forcing an explicit governance
+decision rather than silently defaulting it to excluded.
 
 Exact duplicate rows keep one deterministic canonical record. Redundant rows
 are marked and excluded. When a complaint ID has conflicting target inputs,

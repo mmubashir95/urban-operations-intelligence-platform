@@ -144,6 +144,9 @@ def build_step4_tables(
         .rename_axis("primary_exclusion_reason").rename("row_count").reset_index()
     )
     exclusions["row_share"] = exclusions["row_count"] / total
+    # evaluate_target_eligibility already rejects any non-null status outside
+    # allowed_statuses | excluded_statuses, so only a missing (NaN) status can
+    # reach neither branch below.
     status_rows = []
     for status, group in governed.groupby("status_normalized", dropna=False, sort=True):
         label = "<MISSING>" if pd.isna(status) else str(status)

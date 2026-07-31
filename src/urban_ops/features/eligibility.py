@@ -140,9 +140,18 @@ def evaluate_target_eligibility(
         | result["closed_date"].ge(result["created_date"])
     )
     status = result["status"].astype("string").str.strip().str.casefold()
+    unrecognized = sorted(set(status.dropna().unique()) - (allowed | excluded))
+    if unrecognized:
+        raise ValueError(
+            "Unrecognized status values require explicit governance "
+            f"(add to allowed_statuses or excluded_statuses): {unrecognized}"
+        )
     result["status_normalized"] = status
     result["status_allowed"] = status.isin(allowed)
     result["is_cancelled"] = status.eq("cancelled").fillna(False)
+    # Broad "not verifiably closed" flag: true for any non-closed status (including
+    # e.g. pending) and for a closed status inconsistently missing a closed_date.
+    # Not the same as literal status == "open"; see status_normalized for that.
     result["is_open"] = ~result["has_closed_date"] | ~status.eq("closed").fillna(False)
     result["status_closed_date_inconsistent"] = (
         status.eq("closed").fillna(False) ^ result["has_closed_date"]
@@ -163,22 +172,28 @@ def evaluate_target_eligibility(
     outside = ~result["within_selected_scope"] & (
         ~agency_match | ~type_match | result["has_created_date"]
     )
-    conditions = (
-        ("outside_selected_scope", outside),
-        ("missing_created_date", ~result["has_created_date"]),
-        ("missing_due_date", ~result["has_due_date"]),
-        ("missing_closed_date", ~result["has_closed_date"]),
-        ("due_before_created", ~result["valid_due_chronology"]),
-        ("closed_before_created", ~result["valid_closed_chronology"]),
-        ("excluded_status", ~result["status_allowed"]),
-        ("conflicting_duplicate_unique_key", conflict),
-        ("exact_duplicate_unique_key", exact),
-        ("outcome_not_mature", ~result["outcome_mature"]),
-    )
+    condition_by_reason = {
+        "outside_selected_scope": outside,
+        "missing_created_date": ~result["has_created_date"],
+        "missing_due_date": ~result["has_due_date"],
+        "missing_closed_date": ~result["has_closed_date"],
+        "due_before_created": ~result["valid_due_chronology"],
+        "closed_before_created": ~result["valid_closed_chronology"],
+        "excluded_status": ~result["status_allowed"],
+        "conflicting_duplicate_unique_key": conflict,
+        "exact_duplicate_unique_key": exact,
+        "outcome_not_mature": ~result["outcome_mature"],
+    }
+    if set(condition_by_reason) != set(EXCLUSION_PRIORITY) - {"eligible"}:
+        raise RuntimeError("EXCLUSION_PRIORITY and computed conditions have diverged.")
     reasons = pd.Series("eligible", index=result.index, dtype="string")
     available = pd.Series(True, index=result.index)
-    for reason, condition in conditions:
-        selected = available & condition.fillna(False)
+    # EXCLUSION_PRIORITY is the single source of truth for precedence order; the
+    # mapping above only supplies each reason's condition, never its rank.
+    for reason in EXCLUSION_PRIORITY:
+        if reason == "eligible":
+            continue
+        selected = available & condition_by_reason[reason].fillna(False)
         reasons.loc[selected] = reason
         available.loc[selected] = False
     result["primary_exclusion_reason"] = reasons

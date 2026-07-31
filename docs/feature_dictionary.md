@@ -22,3 +22,8 @@ Each row contains `source_column`, `internal_feature_name`, `data_type`, `role`,
 
 Conditional fields are deliberately not described as safe. See
 `docs/leakage_policy.md` for the prediction boundary and due-date decision.
+
+`status` is classified as `POST_CREATION_FIELD` (always blocked), not
+`CONDITIONAL_FEATURE`, because only its final value is captured and it is
+mutable after creation by definition; there is no creation-time snapshot of
+status to conditionally approve.

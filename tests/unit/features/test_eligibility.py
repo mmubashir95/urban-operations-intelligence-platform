@@ -90,3 +90,16 @@ def test_conflicting_duplicate_excludes_whole_group() -> None:
 def test_missing_required_column_raises() -> None:
     with pytest.raises(ValueError, match="missing required columns"):
         evaluate(pd.DataFrame([BASE]).drop(columns="status"))
+
+
+def test_outcome_maturity_boundary_equality_is_mature_and_eligible() -> None:
+    # extraction_timestamp in evaluate() is exactly 2026-01-31T00:00:00Z.
+    result = evaluate(pd.DataFrame([{**BASE, "due_date": "2026-01-31T00:00:00Z"}]))
+    assert result.loc[0, "outcome_mature"]
+    assert result.loc[0, "target_eligible"]
+    assert result.loc[0, "primary_exclusion_reason"] == "eligible"
+
+
+def test_unrecognized_status_raises() -> None:
+    with pytest.raises(ValueError, match="Unrecognized status values"):
+        evaluate(pd.DataFrame([{**BASE, "status": "In Progress"}]))
