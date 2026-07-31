@@ -219,3 +219,8 @@ __marimo__/
 
 # Generated analysis reports
 reports/
+
+# Immutable raw extracts and atomic ingestion work directories
+data/raw/**
+!data/raw/.gitkeep
+data/raw/**/.run_id=*.tmp-*/

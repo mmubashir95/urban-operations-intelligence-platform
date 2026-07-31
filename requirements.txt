@@ -5,6 +5,8 @@ jupyterlab
 # Data analysis and visualization
 matplotlib
 pandas
+pyarrow
+PyYAML
 
 # Testing
 pytest

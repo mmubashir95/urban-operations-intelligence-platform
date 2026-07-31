@@ -68,8 +68,8 @@ def load_selected_scope_authority(
         extracted = pd.Timestamp(_value(row, "extraction_timestamp"))
     except (TypeError, ValueError) as error:
         raise ValueError("Selected-scope authority contains an invalid timestamp.") from error
-    if start >= end:
-        raise ValueError("Selected-scope start date must be before end date.")
+    if start > end:
+        raise ValueError("Selected-scope start date must not be after end date.")
     extracted = (
         extracted.tz_localize("UTC") if extracted.tzinfo is None
         else extracted.tz_convert("UTC")
