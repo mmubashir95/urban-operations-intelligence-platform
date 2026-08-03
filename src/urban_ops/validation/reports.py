@@ -33,6 +33,14 @@ REQUIRED_REPORT_TABLES = (
     "proposed_cleaning_actions.csv",
 )
 
+CHRONOLOGY_SOURCE_COLUMNS = {
+    "due_before_created": "created_date|due_date",
+    "closed_before_created": "created_date|closed_date",
+    "resolution_action_before_created": "created_date|resolution_action_updated_date",
+    "closed_present_created_invalid": "created_date|closed_date",
+    "due_present_created_invalid": "created_date|due_date",
+}
+
 
 def proposed_cleaning_actions(checks: tuple[ValidationCheck, ...]) -> pd.DataFrame:
     """Convert non-pass findings into recommendations, never transformations."""
@@ -54,6 +62,8 @@ def proposed_cleaning_actions(checks: tuple[ValidationCheck, ...]) -> pd.DataFra
             source_column = "status"
         elif check.area == "duplicate":
             source_column = "unique_key"
+        elif check.area == "chronology":
+            source_column = CHRONOLOGY_SOURCE_COLUMNS.get(parts[-1], "")
         else:
             source_column = ""
         rows.append({

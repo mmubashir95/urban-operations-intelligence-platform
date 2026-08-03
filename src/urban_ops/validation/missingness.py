@@ -19,16 +19,14 @@ def _missingness_policy(column: str, role: str, null_count: int) -> tuple[str, s
     """Return consistent severity and Step 7 recommendation for one field."""
     if null_count == 0:
         return "INFO", "No missing-value action required."
-    if column in {"unique_key", "created_date"}:
-        return "CRITICAL", "Quarantine affected rows; do not synthesize identifiers or creation time."
+    if column in {"unique_key", "created_date", "agency", "complaint_type"}:
+        return "CRITICAL", "Quarantine affected rows; do not synthesize identity or scope values."
     if column == "due_date":
         return "ERROR", "Preserve rows and mark target-ineligible; do not impute due dates."
     if column == "closed_date":
         return "WARNING", "Preserve rows and mark target-ineligible; do not impute closure time."
     if column in {"latitude", "longitude", "incident_zip"}:
         return "WARNING", "Preserve complaint; handle the geographic feature as missing."
-    if role == "SCOPE_FIELD":
-        return "CRITICAL", "Quarantine rows whose scope cannot be verified."
     if role in {FeatureRole.POST_CREATION_FIELD.value, FeatureRole.CONDITIONAL_FEATURE.value}:
         return "WARNING", "Preserve nulls until an explicit Step 7 field policy is approved."
     return "INFO", "Preserve source nulls unless Step 7 approves a deterministic rule."

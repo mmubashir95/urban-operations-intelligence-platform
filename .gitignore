@@ -224,3 +224,7 @@ reports/
 data/raw/**
 !data/raw/.gitkeep
 data/raw/**/.run_id=*.tmp-*/
+
+# Immutable processed cleaning runs and latest pointers
+data/processed/**
+!data/processed/.gitkeep

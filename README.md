@@ -132,3 +132,55 @@ Execute the evidence notebook after validation with:
 .venv/bin/jupyter nbconvert --to notebook --execute notebooks/07_data_validation.ipynb \
   --inplace --ExecutePreprocessor.timeout=600
 ```
+
+## Step 7: governed data cleaning
+
+Step 6 measured the issues. Step 7 applies approved, auditable transformations.
+It requires matching Step 6 evidence for the same raw run and hash, zero critical
+validation findings, and agreement with the Step 3 scope authority.
+
+The cleaning policy is documented in `docs/cleaning_policy.md`. In summary:
+
+- timestamps become UTC-aware in processed outputs, without guessing invalid values;
+- missing due and closure dates are not imputed and remain target-ineligible;
+- configured categories are trimmed and configured true blanks become null;
+- literal `UNKNOWN` channels and `Unspecified` boroughs remain explicit;
+- missing geography is preserved and never inferred;
+- one deterministic canonical exact duplicate is retained, while complete
+  conflicting groups are preserved but excluded;
+- Step 4 remains the authority for eligibility, exclusion precedence, target
+  construction, status governance, and leakage prevention.
+
+Verify inputs, counts, and the proposed output without writing artifacts:
+
+```bash
+make clean-resolution-risk-dry-run
+```
+
+Run cleaning:
+
+```bash
+make clean-resolution-risk
+```
+
+The equivalent direct command is
+`PYTHONPATH=src .venv/bin/python -m urban_ops.cleaning.pipeline --config configs/data/cleaning_rules.yaml`.
+Each successful immutable run is written under
+`data/processed/resolution_risk/run_id=<timestamp>_<cleaning-hash>/` with:
+
+- `cleaned_service_requests.parquet` for every deterministically retained row;
+- `eligible_service_requests.parquet` for governed binary targets;
+- `excluded_service_requests.parquet` for nullable targets and explicit reasons;
+- `cleaning_metadata.json` for lineage, counts, hashes, and decisions;
+- `cleaning_rules_snapshot.yaml` for the exact applied configuration.
+
+`data/processed/resolution_risk/latest.json` changes only after a successful run.
+Reports are generated under `reports/09_data_cleaning/`. Raw data is never
+rewritten, and processed analytical data is not yet a feature matrix or split.
+
+Execute the cleaning evidence notebook with:
+
+```bash
+.venv/bin/jupyter nbconvert --to notebook --execute notebooks/08_data_cleaning.ipynb \
+  --inplace --ExecutePreprocessor.timeout=600
+```

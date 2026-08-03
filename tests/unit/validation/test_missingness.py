@@ -59,6 +59,17 @@ def test_critical_identifier_missingness() -> None:
     assert result.missingness_severity == "CRITICAL"
 
 
+def test_missing_scope_fields_receive_direct_critical_severity() -> None:
+    result = profile_missingness(
+        pd.DataFrame({
+            "agency": [None], "complaint_type": [None], "created_date": [None],
+        }),
+        null_like_strings=NULL_LIKE,
+    ).set_index("column_name")
+    assert result["missingness_severity"].eq("CRITICAL").all()
+    assert result["recommended_step_7_action"].str.contains("scope").all()
+
+
 def test_unknown_column_uses_documented_policy() -> None:
     result = profile_missingness(
         pd.DataFrame({"future_new_field": [None]}), null_like_strings=NULL_LIKE

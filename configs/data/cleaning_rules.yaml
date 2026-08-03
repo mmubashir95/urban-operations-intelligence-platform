@@ -1,0 +1,52 @@
+input:
+  raw_root: "data/raw/nyc_311"
+  validation_report_root: "reports/08_data_validation"
+  scope_authority_file: "reports/05_temporal_stability/tables/selected_scope_summary.csv"
+  scope_extraction_metadata_file: "reports/05_temporal_stability/tables/extraction_metadata.csv"
+  require_validation_critical_count: 0
+
+output:
+  root: "data/processed/resolution_risk"
+  report_root: "reports/09_data_cleaning"
+  format: "parquet"
+  schema_version: "1.0"
+
+timestamps:
+  columns:
+    - created_date
+    - closed_date
+    - due_date
+    - resolution_action_updated_date
+  timezone: "UTC"
+  invalid_policy: "preserve_and_exclude_from_target"
+  impute: false
+
+categories:
+  trim_columns:
+    - agency
+    - agency_name
+    - complaint_type
+    - descriptor
+    - descriptor_2
+    - status
+    - borough
+    - location_type
+    - open_data_channel_type
+  blank_to_null_columns:
+    - descriptor
+    - descriptor_2
+    - borough
+    - location_type
+  collapse_repeated_spaces_columns: []
+  approved_mappings: {}
+
+duplicates:
+  identifier: "unique_key"
+  exact_policy: "keep_deterministic"
+  conflict_policy: "exclude_entire_group"
+
+feature_decisions:
+  all_null_columns:
+    - descriptor_2
+  zero_variance_columns:
+    - open_data_channel_type
