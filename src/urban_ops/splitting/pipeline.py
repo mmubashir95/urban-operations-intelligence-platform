@@ -27,13 +27,19 @@ from urban_ops.splitting.metadata import (
     SplitMetadata, read_split_metadata, write_split_metadata,
 )
 from urban_ops.splitting.models import (
-    CandidateSplitResult, SplitBoundaries, SplitRunResult,
+    CandidateSplitResult, SplitBoundaries, SplitRunPaths, SplitRunResult,
 )
 from urban_ops.splitting.outputs import (
-    create_temporary_split, prepare_split_directory, remove_temporary_split,
+    create_temporary_split, prepare_split_directory, publish_split_run,
+    remove_temporary_split, read_split_latest_bytes, restore_split_latest,
     split_output_paths, update_split_latest, write_and_validate_split_parquets,
 )
-from urban_ops.splitting.reports import build_report_tables, write_split_reports
+from urban_ops.splitting.reports import (
+    build_report_tables, complete_report_publication,
+    create_temporary_report_directory, publish_report_directory,
+    remove_temporary_report_directory, restore_previous_report_directory,
+    validate_split_reports, write_split_reports,
+)
 from urban_ops.splitting.source import load_verified_source, resolve_cleaning_run
 from urban_ops.splitting.temporal_profile import build_monthly_profile
 from urban_ops.utils.paths import PROJECT_ROOT
@@ -195,6 +201,39 @@ def _iso(value: pd.Timestamp) -> str:
 def _same_boundaries(left: SplitBoundaries, right: SplitBoundaries) -> bool:
     """Return whether two complete boundary contracts match exactly."""
     return left == right
+
+
+def _rollback_failed_publication(
+    *, paths: SplitRunPaths, previous_latest: bytes | None, report_root: Path,
+    report_backup: Path | None, temporary_run: Path,
+    temporary_report: Path | None, split_published: bool,
+    reports_published: bool,
+) -> list[str]:
+    """Best-effort rollback every publication surface and report any failures."""
+    rollback_errors: list[str] = []
+    try:
+        restore_split_latest(paths, previous_latest)
+    except OSError as error:
+        rollback_errors.append(f"latest pointer restore failed: {error}")
+    if reports_published:
+        try:
+            restore_previous_report_directory(report_root, report_backup)
+        except OSError as error:
+            rollback_errors.append(f"report restore failed: {error}")
+    if split_published:
+        remove_temporary_split(paths.run_directory)
+        if paths.run_directory.exists():
+            rollback_errors.append("new split directory removal failed")
+    remove_temporary_split(temporary_run)
+    if temporary_run.exists():
+        rollback_errors.append("temporary split directory removal failed")
+    if temporary_report is not None:
+        remove_temporary_report_directory(temporary_report)
+        if temporary_report.exists():
+            rollback_errors.append("temporary report directory removal failed")
+    if report_backup is not None and report_backup.exists():
+        rollback_errors.append("previous report backup cleanup failed")
+    return rollback_errors
 
 
 def _build_metadata(
@@ -374,8 +413,15 @@ def run_time_based_split(
 
     prepare_split_directory(paths, overwrite_incomplete=overwrite_incomplete)
     temporary_run = create_temporary_split(paths)
+    final_report_root = report_root or config.report_root
+    previous_latest = read_split_latest_bytes(paths)
+    temporary_report: Path | None = None
+    report_backup: Path | None = None
+    split_published = False
+    reports_published = False
     metadata: SplitMetadata | None = None
     try:
+        temporary_report = create_temporary_report_directory(final_report_root)
         output_hashes = write_and_validate_split_parquets(
             temporary_run, frames, source_columns=list(source.frame.columns)
         )
@@ -392,23 +438,37 @@ def run_time_based_split(
         write_split_metadata(metadata, temporary_metadata)
         read_split_metadata(temporary_metadata)
         write_split_reports(
-            report_root=report_root or config.report_root, tables=tables,
+            report_root=temporary_report, tables=tables,
             metadata=metadata, selected_candidate_id=config.selected_candidate_id,
         )
+        validate_split_reports(temporary_report, metadata)
         if (
             sha256_file(source.eligible_path) != source.eligible_sha256
             or source.eligible_path.stat().st_mtime_ns != source.eligible_mtime_ns
         ):
             raise RuntimeError("Step 7 eligible source changed before split finalization.")
-        temporary_run.replace(paths.run_directory)
-        try:
-            update_split_latest(paths, updated_utc=completed.isoformat())
-        except Exception:
-            remove_temporary_split(paths.run_directory)
-            raise
-    except Exception:
-        remove_temporary_split(temporary_run)
-        LOGGER.exception("Time-based split failed; temporary split output was removed.")
+        publish_split_run(temporary_run, paths)
+        split_published = True
+        report_backup = publish_report_directory(temporary_report, final_report_root)
+        reports_published = True
+        update_split_latest(paths, updated_utc=completed.isoformat())
+        complete_report_publication(report_backup)
+        report_backup = None
+    except Exception as error:
+        rollback_errors = _rollback_failed_publication(
+            paths=paths, previous_latest=previous_latest,
+            report_root=final_report_root, report_backup=report_backup,
+            temporary_run=temporary_run, temporary_report=temporary_report,
+            split_published=split_published, reports_published=reports_published,
+        )
+        LOGGER.exception(
+            "Time-based split failed; staged and published changes were rolled back."
+        )
+        if rollback_errors:
+            raise RuntimeError(
+                "Split publication failed and rollback was incomplete: "
+                + "; ".join(rollback_errors)
+            ) from error
         raise
     final_hash = sha256_file(source.eligible_path)
     final_mtime = source.eligible_path.stat().st_mtime_ns

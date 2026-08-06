@@ -81,8 +81,14 @@ source cleaning/raw lineage, eligible file hash and modification time, exact
 UTC boundaries, config hash, counts, class balance, date ranges, output paths,
 and hashes. Rows are sorted by `created_date`, then `unique_key` using stable
 sorting. Outputs are written to a temporary sibling directory, read back,
-validated, and atomically finalized; successful runs are immutable and the
-latest pointer updates only after success.
+and validated. Reports are also written to a temporary sibling directory and
+validated against split metadata before publication. The eligible source hash
+and modification time are rechecked before either directory becomes
+authoritative. The pipeline then publishes the split directory, replaces the
+report directory, and updates the latest pointer last. This is a rollback-safe
+publication sequence rather than a cross-filesystem transaction: report or
+pointer failure removes the new split, restores the previous reports and
+pointer, and removes temporary paths. Successful split runs remain immutable.
 
 Train, validation, and test preserve the Step 7 eligible schema. This supports
 auditing but does not make outcome or leakage-prone fields acceptable model

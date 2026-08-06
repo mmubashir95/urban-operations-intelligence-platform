@@ -58,6 +58,11 @@ def create_temporary_split(paths: SplitRunPaths) -> Path:
     ))
 
 
+def publish_split_run(temporary_run: Path, paths: SplitRunPaths) -> None:
+    """Atomically publish one validated split directory at its immutable path."""
+    temporary_run.replace(paths.run_directory)
+
+
 def write_and_validate_split_parquets(
     temporary_run: Path, frames: SplitFrames, *, source_columns: list[str]
 ) -> dict[str, str]:
@@ -89,8 +94,36 @@ def update_split_latest(paths: SplitRunPaths, *, updated_utc: str) -> None:
         "updated_utc": updated_utc,
     }
     temporary = paths.latest_pointer.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(paths.latest_pointer)
+    try:
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        temporary.replace(paths.latest_pointer)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def read_split_latest_bytes(paths: SplitRunPaths) -> bytes | None:
+    """Capture the current latest pointer for transaction rollback."""
+    return paths.latest_pointer.read_bytes() if paths.latest_pointer.is_file() else None
+
+
+def restore_split_latest(paths: SplitRunPaths, previous_content: bytes | None) -> None:
+    """Restore the latest pointer to its exact pre-publication state."""
+    update_temporary = paths.latest_pointer.with_suffix(".json.tmp")
+    rollback_temporary = paths.latest_pointer.with_suffix(".json.rollback.tmp")
+    update_temporary.unlink(missing_ok=True)
+    if previous_content is None:
+        paths.latest_pointer.unlink(missing_ok=True)
+        rollback_temporary.unlink(missing_ok=True)
+        return
+    try:
+        rollback_temporary.write_bytes(previous_content)
+        rollback_temporary.replace(paths.latest_pointer)
+    except OSError:
+        rollback_temporary.unlink(missing_ok=True)
+        raise
 
 
 def remove_temporary_split(path: Path) -> None:

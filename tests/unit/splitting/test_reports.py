@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from urban_ops.splitting.pipeline import run_time_based_split
-from urban_ops.splitting.reports import REQUIRED_REPORT_TABLES
+from urban_ops.splitting.reports import REQUIRED_REPORT_TABLES, validate_split_reports
 from tests.unit.splitting.conftest import build_split_fixture
 
 
@@ -21,7 +22,24 @@ def test_all_required_reports_written_and_summary_references_source_and_split(
     assert all((fixture.reports / "tables" / name).is_file() for name in REQUIRED_REPORT_TABLES)
     summary = (fixture.reports / "split_summary.md").read_text()
     assert result.source.metadata.cleaning_run_id in summary
+    assert result.metadata.split_id in summary
     assert result.metadata.split_id in result.paths.metadata.read_text()
+
+
+def test_report_validation_rejects_counts_that_differ_from_metadata(
+    tmp_path: Path, eligible_frame
+) -> None:
+    fixture = build_split_fixture(tmp_path, eligible_frame)
+    result = run_time_based_split(
+        config_path=fixture.config,
+        run_started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    counts_path = fixture.reports / "tables" / "split_row_counts.csv"
+    counts = pd.read_csv(counts_path)
+    counts.loc[counts["split_name"].eq("train"), "row_count"] += 1
+    counts.to_csv(counts_path, index=False)
+    with pytest.raises(RuntimeError, match="train rows differ"):
+        validate_split_reports(fixture.reports, result.metadata)
 
 
 def test_report_counts_targets_dates_overlaps_and_reconciliation(

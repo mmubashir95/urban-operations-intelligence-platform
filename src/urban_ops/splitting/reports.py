@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import tempfile
+from uuid import uuid4
 
 import pandas as pd
 
@@ -20,6 +23,107 @@ REQUIRED_REPORT_TABLES = (
     "identifier_overlap_checks.csv", "temporal_drift_summary.csv",
     "output_reconciliation.csv",
 )
+
+REQUIRED_REPORT_COLUMNS = {
+    "monthly_target_distribution.csv": (
+        "month", "row_count", "on_time_count", "missed_count",
+        "missed_target_rate", "cumulative_row_count", "cumulative_row_share",
+        "minimum_created_date", "maximum_created_date", "has_both_classes",
+    ),
+    "candidate_split_boundaries.csv": (
+        "candidate_id", "train_start", "train_end_exclusive",
+        "validation_start", "validation_end_exclusive", "test_start",
+        "test_end_exclusive", "interval_convention", "train_rows", "train_share",
+        "train_months", "train_on_time", "train_missed", "train_missed_rate",
+        "train_minimum_class_count", "train_minimum_monthly_row_count",
+        "validation_rows", "validation_share", "validation_months",
+        "validation_on_time", "validation_missed", "validation_missed_rate",
+        "validation_minimum_class_count", "validation_minimum_monthly_row_count",
+        "test_rows", "test_share", "test_months", "test_on_time", "test_missed",
+        "test_missed_rate", "test_minimum_class_count",
+        "test_minimum_monthly_row_count", "minimum_monthly_row_count",
+        "date_coverage_gaps", "maximum_rate_difference", "chronology_passed",
+        "all_rows_assigned", "all_splits_have_both_classes",
+        "minimum_rows_passed", "minimum_class_counts_passed", "qualified", "rank",
+        "recommended", "decision_reason",
+    ),
+    "selected_split_boundaries.csv": (
+        "split_name", "start_inclusive", "end_exclusive", "row_count",
+        "row_share", "on_time_count", "missed_count", "missed_target_rate",
+        "minimum_created_date", "maximum_created_date", "selection_reason",
+    ),
+    "split_row_counts.csv": ("split_name", "row_count", "row_share"),
+    "split_target_distribution.csv": (
+        "split_name", "on_time_count", "missed_count", "total_count",
+        "missed_target_rate",
+    ),
+    "split_date_ranges.csv": (
+        "split_name", "configured_start_inclusive", "configured_end_exclusive",
+        "observed_min_created_date", "observed_max_created_date",
+    ),
+    "split_month_coverage.csv": (
+        "split_name", "month", "row_count", "on_time_count", "missed_count",
+        "missed_target_rate",
+    ),
+    "split_integrity_checks.csv": (
+        "check_id", "area", "status", "observed_value", "expected_value",
+        "affected_rows", "message",
+    ),
+    "identifier_overlap_checks.csv": (
+        "left_split", "right_split", "overlap_count", "status",
+    ),
+    "temporal_drift_summary.csv": (
+        "comparison_type", "source_period", "destination_period",
+        "source_target_rate", "destination_target_rate", "absolute_difference",
+        "relative_difference", "source_rows", "destination_rows", "metric_value",
+        "interpretation",
+    ),
+    "output_reconciliation.csv": (
+        "check_name", "left_value", "right_value", "status",
+    ),
+}
+
+
+def create_temporary_report_directory(report_root: Path) -> Path:
+    """Create a sibling report directory that is invisible to final consumers."""
+    report_root.parent.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(
+        prefix=f".{report_root.name}.tmp-", dir=report_root.parent
+    ))
+
+
+def publish_report_directory(temporary_report: Path, report_root: Path) -> Path | None:
+    """Atomically replace reports and return the retained previous-report backup."""
+    backup = None
+    if report_root.exists():
+        backup = report_root.with_name(f".{report_root.name}.backup-{uuid4().hex}")
+        report_root.replace(backup)
+    try:
+        temporary_report.replace(report_root)
+    except OSError:
+        if backup is not None and backup.exists():
+            backup.replace(report_root)
+        raise
+    return backup
+
+
+def restore_previous_report_directory(report_root: Path, backup: Path | None) -> None:
+    """Remove newly published reports and restore the exact previous directory."""
+    if report_root.exists():
+        shutil.rmtree(report_root)
+    if backup is not None and backup.exists():
+        backup.replace(report_root)
+
+
+def complete_report_publication(backup: Path | None) -> None:
+    """Discard the previous-report backup after the latest pointer is durable."""
+    if backup is not None:
+        shutil.rmtree(backup, ignore_errors=True)
+
+
+def remove_temporary_report_directory(path: Path) -> None:
+    """Remove a staged or backed-up report directory after failure."""
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def _target_stats(frame: pd.DataFrame, target_column: str) -> tuple[int, int, float]:
@@ -191,6 +295,7 @@ def write_split_reports(
     selected_reason = tables["selected_split_boundaries.csv"]["selection_reason"].iloc[0]
     summary = f"""# Step 8 Time-Based Splitting Summary
 
+- Split run: `{metadata.split_id}`
 - Source cleaning run: `{metadata.source_cleaning_run_id}`
 - Source eligible dataset: `{metadata.source_eligible_dataset_path}`
 - Source eligible SHA-256: `{metadata.source_eligible_sha256}`
@@ -231,6 +336,12 @@ that interpretation.
 - Validation: `{metadata.output_paths['validation']}`
 - Test: `{metadata.output_paths['test']}`
 
+Split data and reports were prepared and validated in temporary sibling
+directories. The source hash and modification time were rechecked before
+publication. Publication across the split directory, report directory, and
+latest pointer is rollback-safe: a failed publication restores the previous
+reports and pointer and removes the new split run.
+
 ## Test-set governance
 
 The test set must not be used for feature selection, preprocessing design,
@@ -251,3 +362,83 @@ The deterministic chronological split is complete. No preprocessing, feature
 engineering, model selection, evaluation, or training was performed.
 """
     (report_root / "split_summary.md").write_text(summary, encoding="utf-8")
+
+
+def validate_split_reports(report_root: Path, metadata: SplitMetadata) -> None:
+    """Read back staged reports and reconcile them with successful-run metadata."""
+    summary_path = report_root / "split_summary.md"
+    required_paths = [
+        report_root / "tables" / filename for filename in REQUIRED_REPORT_TABLES
+    ]
+    missing = [str(path) for path in [summary_path, *required_paths] if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"Required split reports are missing: {missing}")
+
+    summary = summary_path.read_text(encoding="utf-8")
+    if not summary.strip():
+        raise RuntimeError("Split summary is empty.")
+    if metadata.split_id not in summary:
+        raise RuntimeError("Split summary does not reference the expected split_id.")
+    if metadata.source_cleaning_run_id not in summary:
+        raise RuntimeError(
+            "Split summary does not reference the expected source cleaning run."
+        )
+
+    tables: dict[str, pd.DataFrame] = {}
+    for filename, required_columns in REQUIRED_REPORT_COLUMNS.items():
+        table = pd.read_csv(report_root / "tables" / filename)
+        if tuple(table.columns) != required_columns:
+            raise RuntimeError(f"Split report has an invalid schema: {filename}")
+        tables[filename] = table
+
+    split_names = ("train", "validation", "test")
+    selected = tables["selected_split_boundaries.csv"].set_index("split_name")
+    rows = tables["split_row_counts.csv"].set_index("split_name")
+    targets = tables["split_target_distribution.csv"].set_index("split_name")
+    if set(selected.index) != set(split_names):
+        raise RuntimeError("Selected-boundary reports must contain all three splits.")
+    if set(rows.index) != set(split_names) or set(targets.index) != set(split_names):
+        raise RuntimeError("Count reports must contain all three splits.")
+
+    expected_boundaries = {
+        "train": (metadata.train_start_inclusive, metadata.train_end_exclusive),
+        "validation": (
+            metadata.validation_start_inclusive,
+            metadata.validation_end_exclusive,
+        ),
+        "test": (metadata.test_start_inclusive, metadata.test_end_exclusive),
+    }
+    for name in split_names:
+        expected_start, expected_end = expected_boundaries[name]
+        if (
+            selected.loc[name, "start_inclusive"] != expected_start
+            or selected.loc[name, "end_exclusive"] != expected_end
+        ):
+            raise RuntimeError(f"Reported {name} boundaries differ from split metadata.")
+        expected_rows = int(getattr(metadata, f"{name}_row_count"))
+        expected_on_time = int(getattr(metadata, f"{name}_on_time_count"))
+        expected_missed = int(getattr(metadata, f"{name}_missed_count"))
+        if int(selected.loc[name, "row_count"]) != expected_rows:
+            raise RuntimeError(f"Selected-boundary {name} rows differ from metadata.")
+        if (
+            int(selected.loc[name, "on_time_count"]) != expected_on_time
+            or int(selected.loc[name, "missed_count"]) != expected_missed
+        ):
+            raise RuntimeError(
+                f"Selected-boundary {name} target counts differ from metadata."
+            )
+        if int(rows.loc[name, "row_count"]) != expected_rows:
+            raise RuntimeError(f"Reported {name} rows differ from split metadata.")
+        if (
+            int(targets.loc[name, "on_time_count"]) != expected_on_time
+            or int(targets.loc[name, "missed_count"]) != expected_missed
+            or int(targets.loc[name, "total_count"]) != expected_rows
+        ):
+            raise RuntimeError(f"Reported {name} target counts differ from metadata.")
+
+    reconciliation = tables["output_reconciliation.csv"]
+    if reconciliation.empty or not reconciliation["status"].eq("PASS").all():
+        raise RuntimeError("Split output reconciliation reports a failure.")
+    integrity = tables["split_integrity_checks.csv"]
+    if integrity.empty or integrity["status"].eq("FAIL").any():
+        raise RuntimeError("Split integrity reports contain a failure.")

@@ -221,9 +221,13 @@ make split-resolution-risk
 Outputs are written under `data/splits/resolution_risk/split_id=.../` as
 `train.parquet`, `validation.parquet`, `test.parquet`, `split_metadata.json`,
 and an exact rules snapshot. Reports are written under
-`reports/10_time_based_splitting/`, and `latest.json` changes only after a
-successful run. The Step 7 source hash and modification time are verified
-unchanged.
+`reports/10_time_based_splitting/`. Split files and reports are prepared and
+validated in temporary sibling directories, then the Step 7 source hash and
+modification time are rechecked before publication. The pipeline provides
+rollback-safe publication across the split-run directory, report directory,
+and `latest.json`: a failure removes the new split, restores or preserves the
+previous reports and pointer, and removes temporary paths. `latest.json`
+changes only after the split and reports have been published successfully.
 
 These outputs preserve the complete eligible analytical schema for auditing;
 they are not final feature matrices. No imputer, encoder, scaler, selector, or

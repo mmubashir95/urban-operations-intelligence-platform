@@ -66,12 +66,16 @@ def validate_boundaries(
     """Require ordered contiguous half-open ranges that fully cover the source."""
     if boundaries.interval_convention != SUPPORTED_INTERVAL:
         raise ValueError(f"Unsupported interval convention: {boundaries.interval_convention}")
-    ordered = (
+    ranges_are_valid = (
         boundaries.train_start < boundaries.train_end_exclusive
-        == boundaries.validation_start < boundaries.validation_end_exclusive
-        == boundaries.test_start < boundaries.test_end_exclusive
+        and boundaries.validation_start < boundaries.validation_end_exclusive
+        and boundaries.test_start < boundaries.test_end_exclusive
     )
-    if not ordered:
+    ranges_are_contiguous = (
+        boundaries.train_end_exclusive == boundaries.validation_start
+        and boundaries.validation_end_exclusive == boundaries.test_start
+    )
+    if not (ranges_are_valid and ranges_are_contiguous):
         raise ValueError("Split boundaries must be ordered, contiguous, and non-overlapping.")
     if source_min is not None and boundaries.train_start > source_min:
         raise ValueError("Split boundaries do not include the earliest source row.")
