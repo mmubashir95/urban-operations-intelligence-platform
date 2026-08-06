@@ -184,3 +184,55 @@ Execute the cleaning evidence notebook with:
 .venv/bin/jupyter nbconvert --to notebook --execute notebooks/08_data_cleaning.ipynb \
   --inplace --ExecutePreprocessor.timeout=600
 ```
+
+## Step 8: time-based splitting
+
+Step 8 partitions the latest successful Step 7 eligible dataset into governed
+chronological train, validation, and test data. Random splitting is prohibited:
+prediction occurs at complaint creation, so `created_date` is the only split
+timestamp. All ranges use half-open `[start, end)` intervals.
+
+Three plausible boundary policies are evaluated against actual monthly volume,
+class counts, coverage, and target-rate drift. Candidate B is selected because
+it passes all minimums, provides substantial validation and test windows, and
+has the smallest split-level target-rate spread:
+
+- Train: `[2024-01-01, 2025-04-01)`
+- Validation: `[2025-04-01, 2025-09-01)`
+- Test: `[2025-09-01, 2026-01-01)`
+
+Each split must contain at least 1,000 rows and 100 rows per target class.
+Temporal drift is reported rather than treated as automatic rejection. The
+test set is protected from feature selection, preprocessing design, category
+decisions, threshold selection, tuning, and model selection.
+
+Verify the source and complete assignment without writing artifacts:
+
+```bash
+make split-resolution-risk-dry-run
+```
+
+Create an immutable split run:
+
+```bash
+make split-resolution-risk
+```
+
+Outputs are written under `data/splits/resolution_risk/split_id=.../` as
+`train.parquet`, `validation.parquet`, `test.parquet`, `split_metadata.json`,
+and an exact rules snapshot. Reports are written under
+`reports/10_time_based_splitting/`, and `latest.json` changes only after a
+successful run. The Step 7 source hash and modification time are verified
+unchanged.
+
+These outputs preserve the complete eligible analytical schema for auditing;
+they are not final feature matrices. No imputer, encoder, scaler, selector, or
+model is fitted. Future preprocessing must be fit on train only and applied
+unchanged to validation and test.
+
+Execute the evidence notebook with:
+
+```bash
+.venv/bin/jupyter nbconvert --to notebook --execute notebooks/09_time_based_splitting.ipynb \
+  --inplace --ExecutePreprocessor.timeout=600
+```

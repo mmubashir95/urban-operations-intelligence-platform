@@ -228,3 +228,7 @@ data/raw/**/.run_id=*.tmp-*/
 # Immutable processed cleaning runs and latest pointers
 data/processed/**
 !data/processed/.gitkeep
+
+# Immutable chronological split runs and latest pointers
+data/splits/**
+!data/splits/.gitkeep

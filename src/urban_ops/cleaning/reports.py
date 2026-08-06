@@ -159,6 +159,17 @@ def write_cleaning_reports(
     table_root.mkdir(parents=True, exist_ok=True)
     for filename in REQUIRED_REPORT_TABLES:
         tables[filename].to_csv(table_root / filename, index=False)
+    cleaning_checks = tables["cleaning_checks.csv"]
+    immutability_checks = cleaning_checks.loc[
+        cleaning_checks["check_id"].isin(
+            {"boundary.raw_hash_immutable", "boundary.raw_mtime_immutable"}
+        )
+    ]
+    raw_immutability_status = (
+        "PASS"
+        if len(immutability_checks) == 2 and immutability_checks["status"].eq("PASS").all()
+        else "FAIL"
+    )
     summary = f"""# Step 7 Data Cleaning Summary
 
 - Source raw run: `{metadata.source_raw_run_id}`
@@ -193,7 +204,7 @@ summary.
 - Eligible: `{metadata.output_paths['eligible']}`
 - Excluded: `{metadata.output_paths['excluded']}`
 - Reconciliation: **{tables['output_reconciliation.csv']['status'].iloc[0] if tables['output_reconciliation.csv']['status'].eq('PASS').all() else 'FAIL'}**
-- Raw immutability: **PASS**
+- Raw immutability: **{raw_immutability_status}**
 
 ## Remaining modelling decisions
 

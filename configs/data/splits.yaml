@@ -1,0 +1,74 @@
+input:
+  processed_root: "data/processed/resolution_risk"
+  latest_pointer: "data/processed/resolution_risk/latest.json"
+  dataset: "eligible_service_requests.parquet"
+  required_completion_status: "success"
+  scope_authority_file: "reports/05_temporal_stability/tables/selected_scope_summary.csv"
+  scope_extraction_metadata_file: "reports/05_temporal_stability/tables/extraction_metadata.csv"
+
+split:
+  timestamp_column: "created_date"
+  identifier_column: "unique_key"
+  target_column: "missed_resolution_target"
+  interval_convention: "left_closed_right_open"
+
+boundaries:
+  train:
+    start: "2024-01-01"
+    end_exclusive: "2025-04-01"
+  validation:
+    start: "2025-04-01"
+    end_exclusive: "2025-09-01"
+  test:
+    start: "2025-09-01"
+    end_exclusive: "2026-01-01"
+
+candidates:
+  - candidate_id: "A"
+    train_start: "2024-01-01"
+    train_end_exclusive: "2025-07-01"
+    validation_start: "2025-07-01"
+    validation_end_exclusive: "2025-10-01"
+    test_start: "2025-10-01"
+    test_end_exclusive: "2026-01-01"
+  - candidate_id: "B"
+    train_start: "2024-01-01"
+    train_end_exclusive: "2025-04-01"
+    validation_start: "2025-04-01"
+    validation_end_exclusive: "2025-09-01"
+    test_start: "2025-09-01"
+    test_end_exclusive: "2026-01-01"
+  - candidate_id: "C"
+    train_start: "2024-01-01"
+    train_end_exclusive: "2025-01-01"
+    validation_start: "2025-01-01"
+    validation_end_exclusive: "2025-07-01"
+    test_start: "2025-07-01"
+    test_end_exclusive: "2026-01-01"
+
+selected_candidate: "B"
+
+integrity:
+  require_all_rows_assigned: true
+  require_no_date_overlap: true
+  require_no_identifier_overlap: true
+  require_unique_identifiers: true
+  require_binary_target: true
+  require_non_null_target: true
+  require_both_classes_per_split: true
+  require_source_immutability: true
+
+minimums:
+  rows_per_split: 1000
+  rows_per_class_per_split: 100
+
+candidate_analysis:
+  evaluate_multiple_candidates: true
+  maximum_target_rate_difference: null
+  drift_is_warning_only: true
+
+output:
+  root: "data/splits/resolution_risk"
+  report_root: "reports/10_time_based_splitting"
+  format: "parquet"
+  schema_version: "1.0"

@@ -81,6 +81,19 @@ def test_reports_write_all_tables_and_correct_run_id(
     tmp_path: Path, raw_frame, selected_scope
 ) -> None:
     _, tables = build(raw_frame, selected_scope)
+    boundary_checks = pd.DataFrame([
+        {
+            "check_id": check_id, "area": "boundary", "status": "PASS",
+            "observed_value": "same", "expected_value": "same",
+            "affected_rows": 0, "message": "unchanged",
+        }
+        for check_id in (
+            "boundary.raw_hash_immutable", "boundary.raw_mtime_immutable",
+        )
+    ])
+    tables["cleaning_checks.csv"] = pd.concat(
+        [tables["cleaning_checks.csv"], boundary_checks], ignore_index=True
+    )
     write_cleaning_reports(
         report_root=tmp_path,
         tables=tables,
@@ -91,3 +104,31 @@ def test_reports_write_all_tables_and_correct_run_id(
     summary = (tmp_path / "cleaning_summary.md").read_text()
     assert "raw-1" in summary
     assert "agency=HPD; complaint_type=HEAT/HOT WATER" in summary
+    assert "Raw immutability: **PASS**" in summary
+
+
+def test_summary_derives_raw_immutability_failure_from_checks(
+    tmp_path: Path, raw_frame, selected_scope
+) -> None:
+    _, tables = build(raw_frame, selected_scope)
+    tables["cleaning_checks.csv"] = pd.DataFrame([
+        {
+            "check_id": "boundary.raw_hash_immutable", "area": "boundary",
+            "status": "PASS", "observed_value": "same", "expected_value": "same",
+            "affected_rows": 0, "message": "unchanged",
+        },
+        {
+            "check_id": "boundary.raw_mtime_immutable", "area": "boundary",
+            "status": "FAIL", "observed_value": 2, "expected_value": 1,
+            "affected_rows": 1, "message": "changed",
+        },
+    ])
+    write_cleaning_reports(
+        report_root=tmp_path,
+        tables=tables,
+        metadata=metadata(),
+        scope_description="fixture",
+    )
+    assert "Raw immutability: **FAIL**" in (
+        tmp_path / "cleaning_summary.md"
+    ).read_text()
