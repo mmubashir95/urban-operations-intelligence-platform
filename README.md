@@ -285,3 +285,24 @@ Execute Notebook 10 from the repository root:
 Notebook 10 defaults to `PUBLISH_EDA_REPORTS = False`, so ordinary exploratory
 execution does not replace authoritative reports. Set the flag deliberately
 only when notebook-driven publication is intended.
+
+## Step 9B: Notebook 11 feature-policy freeze
+
+Notebook 11 freezes the baseline feature eligibility policy before any
+feature creation or preprocessing. Its machine-readable authority is
+`configs/features/resolution_risk_baseline.yaml`, validated against Step 4
+leakage governance and the existing Notebook 10 evidence tables.
+
+Execute the policy notebook from the repository root:
+
+```bash
+.venv/bin/jupyter nbconvert --to notebook --execute \
+  notebooks/11_feature_engineering_and_preprocessing.ipynb \
+  --inplace --ExecutePreprocessor.timeout=600
+```
+
+The frozen policy approves only `created_hour`, `created_day_of_week`, `created_month`,
+and `is_weekend` to proceed to Phase 2 design. It does not create those fields,
+fit preprocessing, create a feature matrix, train a model, or modify the Step 8
+splits or Notebook 10 reports. The full rationale and phase boundary are in
+`docs/baseline_feature_policy.md`.

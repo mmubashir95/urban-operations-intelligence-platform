@@ -1,0 +1,364 @@
+policy_version: 1
+policy_name: resolution_risk_baseline_eligibility
+policy_stage: feature_policy_freeze
+
+prediction_moment:
+  description: Immediately after complaint creation
+  source: docs/target_definition.md
+
+authority_hierarchy:
+  - priority: 1
+    authority: Step 4 leakage and prediction-time availability
+    source: docs/leakage_policy.md
+  - priority: 2
+    authority: Notebook 10 leakage audit
+    source: reports/11_split_aware_eda/tables/leakage_audit.csv
+  - priority: 3
+    authority: Notebook 10 EDA statuses
+    source: notebooks/10_split_aware_eda.ipynb
+  - priority: 4
+    authority: Notebook 10 missingness, cardinality, and outlier evidence
+    source: reports/11_split_aware_eda/
+  - priority: 5
+    authority: Notebook 10 baseline recommendations
+    source: reports/11_split_aware_eda/tables/baseline_feature_recommendation.csv
+
+notebook_10_handoff:
+  split_id: 20260806T135114Z_9d945cb2da0eecfc
+  integrity: PASS
+  reconciliation: PASS
+  step_9a_decision: COMPLETE
+  model_ready: false
+
+evidence_tables:
+  baseline_recommendation: reports/11_split_aware_eda/tables/baseline_feature_recommendation.csv
+  transformation_recommendation: reports/11_split_aware_eda/tables/transformation_recommendation.csv
+  leakage_audit: reports/11_split_aware_eda/tables/leakage_audit.csv
+  all_null: reports/11_split_aware_eda/tables/all_null_columns.csv
+  zero_variance: reports/11_split_aware_eda/tables/zero_variance_columns.csv
+
+implementation_boundary:
+  approved_candidate_definition: Safe enough to enter deterministic feature-creation design; not guaranteed final model inclusion.
+  feature_creation_allowed_statuses: [APPROVED_CANDIDATE]
+  transformations_implemented: false
+  missing_values_imputed: false
+  rare_categories_grouped: false
+  encoder_fitted: false
+  scaler_fitted: false
+  column_transformer_built: false
+  feature_matrix_created: false
+  model_trained: false
+
+features:
+  - feature_name: created_date
+    source_column: created_date
+    policy_status: SOURCE_ONLY
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: REVIEW
+    variation_status: HAS_VARIATION
+    redundancy_status: SOURCE_FOR_DERIVATIONS
+    reason: Required to derive temporal features; the raw timestamp is not approved as a direct first-pass model feature.
+    evidence_source: [docs/leakage_policy.md, notebooks/10_split_aware_eda.ipynb]
+    phase_2_allowed: false
+
+  - feature_name: created_hour
+    source_column: created_date
+    policy_status: APPROVED_CANDIDATE
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: CANDIDATE
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Preferred creation-time-safe representation for time-of-day patterns.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb, reports/11_split_aware_eda/tables/baseline_feature_recommendation.csv]
+    phase_2_allowed: true
+
+  - feature_name: created_day_of_week
+    source_column: created_date
+    policy_status: APPROVED_CANDIDATE
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: CANDIDATE
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Preferred machine-friendly creation-time weekday representation.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb, reports/11_split_aware_eda/tables/baseline_feature_recommendation.csv]
+    phase_2_allowed: true
+
+  - feature_name: created_month
+    source_column: created_date
+    policy_status: APPROVED_CANDIDATE
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: CANDIDATE
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Preferred interpretable creation-time seasonal representation.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb, reports/11_split_aware_eda/tables/baseline_feature_recommendation.csv]
+    phase_2_allowed: true
+
+  - feature_name: is_weekend
+    source_column: created_date
+    policy_status: APPROVED_CANDIDATE
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: CANDIDATE
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Simple creation-time-safe operational grouping retained alongside weekday for later validation.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb, reports/11_split_aware_eda/tables/baseline_feature_recommendation.csv]
+    phase_2_allowed: true
+
+  - feature_name: created_day_name
+    source_column: created_date
+    policy_status: ALTERNATIVE_REPRESENTATION
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: ALTERNATIVE_REPRESENTATION
+    variation_status: HAS_VARIATION
+    redundancy_status: EXACT_ALTERNATIVE
+    preferred_counterpart: created_day_of_week
+    reason: Human-readable duplicate representation of the preferred weekday candidate.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb]
+    phase_2_allowed: false
+
+  - feature_name: created_month_name
+    source_column: created_date
+    policy_status: ALTERNATIVE_REPRESENTATION
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: ALTERNATIVE_REPRESENTATION
+    variation_status: HAS_VARIATION
+    redundancy_status: EXACT_ALTERNATIVE
+    preferred_counterpart: created_month
+    reason: Human-readable duplicate representation of the preferred month candidate.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb]
+    phase_2_allowed: false
+
+  - feature_name: created_quarter
+    source_column: created_date
+    policy_status: REVIEW_REDUNDANCY
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: REVIEW_REDUNDANCY
+    variation_status: HAS_VARIATION
+    redundancy_status: OVERLAPS_PREFERRED
+    preferred_counterpart: created_month
+    reason: Coarser seasonal representation that overlaps with created_month.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb]
+    phase_2_allowed: false
+
+  - feature_name: created_week_of_year
+    source_column: created_date
+    policy_status: REVIEW_REDUNDANCY
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: REVIEW_REDUNDANCY
+    variation_status: HAS_VARIATION
+    redundancy_status: OVERLAPS_PREFERRED
+    preferred_counterpart: created_month
+    reason: Seasonal representation that overlaps strongly with the preferred month candidate.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb]
+    phase_2_allowed: false
+
+  - feature_name: created_day_of_month
+    source_column: created_date
+    policy_status: REVIEW
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: REVIEW
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Creation-time safe, but current EDA does not justify prioritizing it in the first baseline.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb]
+    phase_2_allowed: false
+
+  - feature_name: created_year
+    source_column: created_date
+    policy_status: CONDITIONAL
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: CONDITIONAL
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: May encode temporal progression or regime rather than a stable operational relationship and may generalize poorly into future years.
+    evidence_source: [notebooks/10_split_aware_eda.ipynb, docs/split_aware_eda_policy.md]
+    phase_2_allowed: false
+
+  - feature_name: borough
+    source_column: borough
+    policy_status: CONDITIONAL
+    prediction_time_status: UNRESOLVED
+    leakage_status: CONDITIONAL
+    eda_status: CONDITIONAL
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Prediction-time availability and later mutability remain unresolved by Step 4 authority.
+    evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv]
+    phase_2_allowed: false
+
+  - feature_name: location_type
+    source_column: location_type
+    policy_status: CONDITIONAL
+    prediction_time_status: UNRESOLVED
+    leakage_status: CONDITIONAL
+    eda_status: CONDITIONAL
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Prediction-time availability and later mutability remain unresolved by Step 4 authority.
+    evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv]
+    phase_2_allowed: false
+
+  - feature_name: incident_zip
+    source_column: incident_zip
+    policy_status: CONDITIONAL
+    prediction_time_status: UNRESOLVED
+    leakage_status: CONDITIONAL
+    eda_status: CONDITIONAL
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Prediction-time availability and later mutability remain unresolved by Step 4 authority.
+    evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv]
+    phase_2_allowed: false
+
+  - feature_name: latitude
+    source_column: latitude
+    policy_status: CONDITIONAL
+    prediction_time_status: UNRESOLVED
+    leakage_status: CONDITIONAL
+    eda_status: CONDITIONAL
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Prediction-time availability and later mutability remain unresolved by Step 4 authority; valid statistical outliers remain retain-only evidence.
+    evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv, reports/11_split_aware_eda/tables/outlier_recommendation.csv]
+    phase_2_allowed: false
+
+  - feature_name: longitude
+    source_column: longitude
+    policy_status: CONDITIONAL
+    prediction_time_status: UNRESOLVED
+    leakage_status: CONDITIONAL
+    eda_status: CONDITIONAL
+    variation_status: HAS_VARIATION
+    redundancy_status: NONE
+    reason: Prediction-time availability and later mutability remain unresolved by Step 4 authority; valid statistical outliers remain retain-only evidence.
+    evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv, reports/11_split_aware_eda/tables/outlier_recommendation.csv]
+    phase_2_allowed: false
+
+  - feature_name: unique_key
+    source_column: unique_key
+    policy_status: EXCLUDE_IDENTIFIER
+    prediction_time_status: AVAILABLE
+    leakage_status: BLOCKED
+    eda_status: NOT_ELIGIBLE
+    variation_status: HAS_VARIATION
+    redundancy_status: NOT_APPLICABLE
+    reason: Identifier is retained for traceability only and may invite memorization.
+    evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv]
+    phase_2_allowed: false
+
+  - feature_name: descriptor_2
+    source_column: descriptor_2
+    policy_status: EXCLUDE_ALL_NULL
+    prediction_time_status: UNRESOLVED
+    leakage_status: CONDITIONAL
+    eda_status: EXCLUDE
+    variation_status: ALL_NULL
+    redundancy_status: NOT_APPLICABLE
+    reason: Training evidence identifies the field as entirely null.
+    evidence_source: [reports/11_split_aware_eda/tables/all_null_columns.csv]
+    phase_2_allowed: false
+
+  - feature_name: agency
+    source_column: agency
+    policy_status: EXCLUDE_ZERO_VARIANCE
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: EXCLUDE
+    variation_status: ZERO_VARIANCE
+    redundancy_status: NOT_APPLICABLE
+    reason: Fixed by the selected scope and has one training value.
+    evidence_source: [reports/11_split_aware_eda/tables/zero_variance_columns.csv]
+    phase_2_allowed: false
+
+  - feature_name: agency_name
+    source_column: agency_name
+    policy_status: EXCLUDE_ZERO_VARIANCE
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: EXCLUDE
+    variation_status: ZERO_VARIANCE
+    redundancy_status: NOT_APPLICABLE
+    reason: Fixed by the selected scope and has one training value.
+    evidence_source: [reports/11_split_aware_eda/tables/zero_variance_columns.csv]
+    phase_2_allowed: false
+
+  - feature_name: complaint_type
+    source_column: complaint_type
+    policy_status: EXCLUDE_ZERO_VARIANCE
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: EXCLUDE
+    variation_status: ZERO_VARIANCE
+    redundancy_status: NOT_APPLICABLE
+    reason: Fixed by the selected scope and has one training value.
+    evidence_source: [reports/11_split_aware_eda/tables/zero_variance_columns.csv]
+    phase_2_allowed: false
+
+  - feature_name: descriptor
+    source_column: descriptor
+    policy_status: EXCLUDE_ZERO_VARIANCE
+    prediction_time_status: UNRESOLVED
+    leakage_status: CONDITIONAL
+    eda_status: EXCLUDE
+    variation_status: ZERO_VARIANCE
+    redundancy_status: NOT_APPLICABLE
+    reason: Training evidence shows no useful variation; exclusion takes precedence over unresolved availability.
+    evidence_source: [reports/11_split_aware_eda/tables/zero_variance_columns.csv, reports/11_split_aware_eda/tables/leakage_audit.csv]
+    phase_2_allowed: false
+
+  - feature_name: open_data_channel_type
+    source_column: open_data_channel_type
+    policy_status: EXCLUDE_ZERO_VARIANCE
+    prediction_time_status: AVAILABLE
+    leakage_status: SAFE
+    eda_status: EXCLUDE
+    variation_status: ZERO_VARIANCE
+    redundancy_status: NOT_APPLICABLE
+    reason: Training evidence shows one fixed channel value in the selected scope.
+    evidence_source: [reports/11_split_aware_eda/tables/zero_variance_columns.csv]
+    phase_2_allowed: false
+
+  # Leakage, post-creation, target-input, target-derived, and unknown governance fields.
+  - {feature_name: closed_date, source_column: closed_date, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: HAS_VARIATION, redundancy_status: NOT_APPLICABLE, reason: Closure outcome is unavailable at complaint creation., evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: due_date, source_column: due_date, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: HAS_VARIATION, redundancy_status: NOT_APPLICABLE, reason: Target input whose creation-time timing and mutability are unproven., evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: status, source_column: status, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Final mutable outcome status is post-creation information., evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: resolution_description, source_column: resolution_description, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: HAS_VARIATION, redundancy_status: NOT_APPLICABLE, reason: Resolution content is produced after complaint creation., evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: resolution_action_updated_date, source_column: resolution_action_updated_date, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: HAS_VARIATION, redundancy_status: NOT_APPLICABLE, reason: Resolution action timestamp is a post-creation operational update., evidence_source: [docs/leakage_policy.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: source_row_fingerprint, source_column: source_row_fingerprint, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: HAS_VARIATION, redundancy_status: NOT_APPLICABLE, reason: Unknown governance field is blocked pending explicit authority., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: created_date_parse_failed, source_column: created_date_parse_failed, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Cleaning audit field is not approved by Step 4 for modelling., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: closed_date_parse_failed, source_column: closed_date_parse_failed, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Outcome-related cleaning audit field is not approved for modelling., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: due_date_parse_failed, source_column: due_date_parse_failed, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Target-input cleaning audit field is not approved for modelling., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: resolution_action_updated_date_parse_failed, source_column: resolution_action_updated_date_parse_failed, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Post-creation cleaning audit field is not approved for modelling., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: has_coordinates, source_column: has_coordinates, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: HAS_VARIATION, redundancy_status: NOT_APPLICABLE, reason: Unknown derived audit field is blocked pending explicit governance., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: coordinates_valid, source_column: coordinates_valid, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: HAS_VARIATION, redundancy_status: NOT_APPLICABLE, reason: Unknown derived audit field is blocked pending explicit governance., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: has_borough, source_column: has_borough, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Cleaning audit field is not approved by Step 4 for modelling., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: has_descriptor, source_column: has_descriptor, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Cleaning audit field is not approved by Step 4 for modelling., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: within_selected_scope, source_column: within_selected_scope, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Scope-governance field is not a model input., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: has_created_date, source_column: has_created_date, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Eligibility audit field is not a model input., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: has_due_date, source_column: has_due_date, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Target-input eligibility field is not a model input., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: has_closed_date, source_column: has_closed_date, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Outcome-derived eligibility field is unavailable at prediction time., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: valid_due_chronology, source_column: valid_due_chronology, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNRESOLVED, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Target-input chronology field is not approved for modelling., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: valid_closed_chronology, source_column: valid_closed_chronology, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Closure-derived chronology field contains outcome information., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: status_normalized, source_column: status_normalized, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Derived final-status field is post-creation information., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: status_allowed, source_column: status_allowed, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Derived final-status eligibility field is outcome-related., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: is_cancelled, source_column: is_cancelled, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Final cancellation state is post-creation information., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: is_open, source_column: is_open, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Final open-or-closed state contains outcome information., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: status_closed_date_inconsistent, source_column: status_closed_date_inconsistent, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Final status and closure consistency field contains outcome information., evidence_source: [reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: outcome_mature, source_column: outcome_mature, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Outcome-maturity governance field is target-derived., evidence_source: [docs/target_definition.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: is_exact_duplicate, source_column: is_exact_duplicate, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Target eligibility and duplicate-governance field is not a model input., evidence_source: [docs/target_definition.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: is_conflicting_duplicate, source_column: is_conflicting_duplicate, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Target eligibility and duplicate-governance field is not a model input., evidence_source: [docs/target_definition.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: target_eligible, source_column: target_eligible, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Target eligibility field is target-derived., evidence_source: [docs/target_definition.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: primary_exclusion_reason, source_column: primary_exclusion_reason, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: ZERO_VARIANCE, redundancy_status: NOT_APPLICABLE, reason: Target exclusion reason is target-derived governance information., evidence_source: [docs/target_definition.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
+  - {feature_name: missed_resolution_target, source_column: missed_resolution_target, policy_status: EXCLUDE_LEAKAGE, prediction_time_status: UNAVAILABLE, leakage_status: BLOCKED, eda_status: NOT_ELIGIBLE, variation_status: HAS_VARIATION, redundancy_status: NOT_APPLICABLE, reason: Model target can never be an input feature., evidence_source: [docs/target_definition.md, reports/11_split_aware_eda/tables/leakage_audit.csv], phase_2_allowed: false}
