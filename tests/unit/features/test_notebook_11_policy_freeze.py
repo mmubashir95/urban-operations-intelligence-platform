@@ -93,7 +93,31 @@ def test_notebook_contains_deterministic_creation_sections_and_next_boundary() -
     assert "derive_split_temporal_features" in all_text
     assert "build_temporal_validation_table" in all_text
     assert "build_feature_reconciliation_table" in all_text
-    assert "Handle Categorical Missing Values" in all_text
+    assert "Categorical Missing-Value Handling" in all_text
     assert "policy_decision" in all_text
     assert "creation_decision" in all_text
     assert "model_ready" in all_text
+
+
+def test_notebook_contains_categorical_missing_learning_sequence() -> None:
+    notebook = _notebook()
+    all_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+
+    for heading in (
+        "## Categorical Missing-Value Handling",
+        "### A. Scope boundary",
+        "### B. Why missingness remains explicit",
+        "### C. Active categorical policy status",
+        "### D. Missingness before transformation",
+        "### E. Canonical `__MISSING__` rule",
+        "### F. Training demonstration",
+        "### G. Split consistency and reconciliation",
+        "### H. Token-collision validation",
+        "### I. Source immutability",
+        "### J. Deferred numeric missingness",
+        "### K. Completion decision",
+    ):
+        assert heading in all_text
+    assert "replace_split_categorical_missing" in all_text
+    assert "build_categorical_missing_evidence" in all_text
+    assert "Handle Rare and Unseen Categories" in all_text

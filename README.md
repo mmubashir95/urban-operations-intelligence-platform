@@ -319,3 +319,17 @@ validation, and test, learns no statistics, writes no feature datasets, and
 performs no missing-value handling, encoding, scaling, or modelling. The source
 contract and exact formulas are documented in
 `docs/deterministic_feature_creation.md`.
+
+## Categorical missing-value handling
+
+Notebook 11 now defines the reusable constant rule `null → __MISSING__` for
+categorical values. The token is configured in
+`configs/features/resolution_risk_categorical_missing.yaml`, and the production
+implementation is `urban_ops.features.categorical_missing`.
+
+The frozen feature policy remains authoritative: `borough`, `location_type`,
+and `incident_zip` are still conditional, so configuration support does not
+activate or transform them in the current baseline. The implementation learns
+no statistics and performs no numeric filling, rare or unseen category
+handling, encoding, scaling, combined preprocessing, or modelling. See
+`docs/categorical_missing_values.md` for the contract and deferred boundaries.

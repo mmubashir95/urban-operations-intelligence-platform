@@ -1,0 +1,12 @@
+config_version: 1
+strategy: constant
+token: "__MISSING__"
+
+supported_columns:
+  - borough
+  - location_type
+  - incident_zip
+
+reserved_tokens:
+  - "__RARE__"
+  - "__UNKNOWN__"
