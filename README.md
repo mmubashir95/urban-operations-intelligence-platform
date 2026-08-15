@@ -240,3 +240,48 @@ Execute the evidence notebook with:
 .venv/bin/jupyter nbconvert --to notebook --execute notebooks/09_time_based_splitting.ipynb \
   --inplace --ExecutePreprocessor.timeout=600
 ```
+
+## Step 9A: split-aware EDA and outlier analysis
+
+Step 9A verifies the latest successful Step 8 split and builds governed
+train-first exploratory evidence. Train is the authority for feature discovery,
+missingness, cardinality, rare-category and statistical-outlier diagnostics,
+and recommendations. Validation and test are restricted to target-prevalence,
+missingness, unknown-category, numeric-range, and structural-drift disclosure;
+test evidence never selects a feature or transformation.
+
+Run all analysis without publishing reports:
+
+```bash
+make eda-resolution-risk-dry-run
+```
+
+Publish the validated report inventory:
+
+```bash
+make eda-resolution-risk
+```
+
+The input is the split referenced by
+`data/splits/resolution_risk/latest.json`. Reports are published rollback-safely
+under `reports/11_split_aware_eda/` with a Markdown summary, 34 stable-schema
+tables, and 13 focused figures. Source split hashes and modification times are
+rechecked, and train, validation, test, split metadata, rules, and the latest
+pointer remain unchanged.
+
+Step 9A derives creation-time calendar fields only in memory. It does not remove
+rows, clip or impute values, fit preprocessing, create a final feature matrix,
+train a model, evaluate a model, or select a threshold. The complete governance
+and Notebook 11 handoff are documented in
+`docs/split_aware_eda_policy.md`.
+
+Execute Notebook 10 from the repository root:
+
+```bash
+.venv/bin/jupyter nbconvert --to notebook --execute notebooks/10_split_aware_eda.ipynb \
+  --inplace --ExecutePreprocessor.timeout=600
+```
+
+Notebook 10 defaults to `PUBLISH_EDA_REPORTS = False`, so ordinary exploratory
+execution does not replace authoritative reports. Set the flag deliberately
+only when notebook-driven publication is intended.

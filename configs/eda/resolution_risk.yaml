@@ -1,0 +1,65 @@
+input:
+  split_root: data/splits/resolution_risk
+  latest_pointer: data/splits/resolution_risk/latest.json
+  required_completion_status: success
+
+columns:
+  identifier: unique_key
+  target: missed_resolution_target
+  timestamp: created_date
+
+candidate_features:
+  categorical: [borough, location_type, incident_zip]
+  numeric: [latitude, longitude]
+  derived_temporal:
+    - created_hour
+    - created_day_of_week
+    - created_day_name
+    - created_day_of_month
+    - created_week_of_year
+    - created_month
+    - created_month_name
+    - created_quarter
+    - created_year
+    - is_weekend
+
+missingness:
+  descriptive_bands:
+    complete_max: 0.0
+    low_max: 0.05
+    moderate_max: 0.30
+    high_max: 0.80
+    very_high_max: 1.0
+
+categorical_analysis:
+  top_n_categories: 25
+  minimum_support_for_target_rate: 50
+  rare_count_candidates: [10, 25, 50]
+  rare_share_candidates: [0.001, 0.005, 0.01]
+
+numeric_analysis:
+  percentiles: [0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99]
+  iqr_multiplier: 1.5
+
+geography:
+  use_existing_validation_bounds: true
+  latitude_valid_range: [-90.0, 90.0]
+  longitude_valid_range: [-180.0, 180.0]
+  nyc_bounding_box:
+    min_latitude: 40.40
+    max_latitude: 41.00
+    min_longitude: -74.30
+    max_longitude: -73.60
+
+outlier_policy:
+  analysis_only: true
+  remove_rows: false
+  clip_values: false
+  impute_values: false
+
+test_governance:
+  structural_comparison_only: true
+  allow_feature_decisions: false
+
+output:
+  report_root: reports/11_split_aware_eda
