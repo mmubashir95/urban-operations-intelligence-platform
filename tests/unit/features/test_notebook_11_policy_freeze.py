@@ -41,7 +41,7 @@ def test_notebook_contains_complete_policy_freeze_learning_sequence() -> None:
     assert legacy_stage_label not in markdown
 
 
-def test_notebook_code_does_not_implement_feature_creation_or_modelling() -> None:
+def test_notebook_code_does_not_implement_preprocessing_or_modelling() -> None:
     notebook = _notebook()
     code = "\n".join(
         "".join(cell["source"])
@@ -63,6 +63,7 @@ def test_notebook_code_does_not_implement_feature_creation_or_modelling() -> Non
         "read_parquet(",
         "to_parquet(",
         "to_csv(",
+        "__RARE__",
     )
     assert all(token not in code for token in forbidden_code)
     assert "load_feature_policy" in code
@@ -72,10 +73,27 @@ def test_notebook_code_does_not_implement_feature_creation_or_modelling() -> Non
     assert legacy_identifier not in code
 
 
-def test_notebook_declares_deterministic_feature_creation_as_next_work() -> None:
+def test_notebook_contains_deterministic_creation_sections_and_next_boundary() -> None:
     notebook = _notebook()
     all_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
 
-    assert "Deterministic Feature Creation" in all_text
+    for heading in (
+        "## Deterministic Feature Creation",
+        "### A. Frozen policy handoff",
+        "### B. Approved derivation allow-list",
+        "### C. Source-column contract",
+        "### D. Temporal derivation rules",
+        "### E. Training derivation preview",
+        "### F. Split consistency and feature-domain validation",
+        "### G. Row and target reconciliation",
+        "### H. Source immutability and implementation boundary",
+        "### I. Completion decision",
+    ):
+        assert heading in all_text
+    assert "derive_split_temporal_features" in all_text
+    assert "build_temporal_validation_table" in all_text
+    assert "build_feature_reconciliation_table" in all_text
+    assert "Handle Categorical Missing Values" in all_text
     assert "policy_decision" in all_text
+    assert "creation_decision" in all_text
     assert "model_ready" in all_text

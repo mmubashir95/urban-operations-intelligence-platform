@@ -301,8 +301,21 @@ Execute the policy notebook from the repository root:
   --inplace --ExecutePreprocessor.timeout=600
 ```
 
-The frozen policy approves only `created_hour`, `created_day_of_week`, `created_month`,
-and `is_weekend` to proceed to Phase 2 design. It does not create those fields,
-fit preprocessing, create a feature matrix, train a model, or modify the Step 8
-splits or Notebook 10 reports. The full rationale and phase boundary are in
-`docs/baseline_feature_policy.md`.
+The frozen policy approves only `created_hour`, `created_day_of_week`,
+`created_month`, and `is_weekend` to proceed to deterministic creation. It does
+not create those fields, fit preprocessing, create a feature matrix, train a
+model, or modify the Step 8 splits or Notebook 10 reports. The full rationale
+and scope boundary are in `docs/baseline_feature_policy.md`.
+
+## Step 9C: deterministic feature creation
+
+Notebook 11 now consumes the frozen baseline policy and creates the approved
+calendar fields from the UTC `created_date` source: `created_hour`,
+`created_day_of_week`, `created_month`, and `is_weekend`. The reusable builder
+is `urban_ops.features.temporal.derive_approved_temporal_features`.
+
+Creation is stateless and non-mutating. It uses the same rules for train,
+validation, and test, learns no statistics, writes no feature datasets, and
+performs no missing-value handling, encoding, scaling, or modelling. The source
+contract and exact formulas are documented in
+`docs/deterministic_feature_creation.md`.

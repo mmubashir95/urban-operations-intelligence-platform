@@ -8,26 +8,31 @@ import numpy as np
 import pandas as pd
 
 from urban_ops.eda.models import EDAConfig, SourceSplitEvidence
+from urban_ops.features.temporal import derive_temporal_features as derive_calendar_features
 
 
 MISSING_CATEGORY = "__MISSING__"
+EDA_TEMPORAL_FEATURES = (
+    "created_hour",
+    "created_day_of_week",
+    "created_day_name",
+    "created_day_of_month",
+    "created_week_of_year",
+    "created_month",
+    "created_month_name",
+    "created_quarter",
+    "created_year",
+    "is_weekend",
+)
 
 
 def derive_temporal_features(frame: pd.DataFrame, timestamp_column: str) -> pd.DataFrame:
     """Return an EDA-only copy with governed creation-time calendar features."""
-    result = frame.copy(deep=True)
-    created = result[timestamp_column]
-    result["created_hour"] = created.dt.hour.astype("Int8")
-    result["created_day_of_week"] = created.dt.dayofweek.astype("Int8")
-    result["created_day_name"] = created.dt.day_name().astype("string")
-    result["created_day_of_month"] = created.dt.day.astype("Int8")
-    result["created_week_of_year"] = created.dt.isocalendar().week.astype("Int8")
-    result["created_month"] = created.dt.month.astype("Int8")
-    result["created_month_name"] = created.dt.month_name().astype("string")
-    result["created_quarter"] = created.dt.quarter.astype("Int8")
-    result["created_year"] = created.dt.year.astype("Int16")
-    result["is_weekend"] = created.dt.dayofweek.ge(5)
-    return result
+    return derive_calendar_features(
+        frame,
+        feature_names=EDA_TEMPORAL_FEATURES,
+        source_column=timestamp_column,
+    )
 
 
 def build_target_tables(
