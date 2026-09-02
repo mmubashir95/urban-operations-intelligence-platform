@@ -97,6 +97,12 @@ governed no-op. Synthetic-policy tests exercise the fit/transform lifecycle;
 the real policy continues to leave all conditional geography untouched. See
 `docs/rare_and_unseen_categories.md`.
 
+Phase 5 subsequently implements a policy-gated, training-only one-hot encoder
+for Phase 4 outputs. It also remains a governed no-op under the real production
+policy because no supported categorical feature is approved. The encoder keeps
+`__MISSING__`, `__RARE__`, and `__UNKNOWN__` as explicit columns when a field is
+activated by a future governed policy. See `docs/categorical_encoding.md`.
+
 The policy now records a formal `DEFERRED` numeric-missingness decision for
 `latitude` and `longitude` while both remain `CONDITIONAL` with prediction-time
 status `UNRESOLVED`. Revisit it only if either field becomes

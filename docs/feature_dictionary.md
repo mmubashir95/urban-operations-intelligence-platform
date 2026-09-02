@@ -37,3 +37,9 @@ later approves one, training-fitted categories remain literal, training-known
 low-count categories use `__RARE__`, later unseen categories use `__UNKNOWN__`,
 and Phase 3 missing values remain `__MISSING__`. See
 `docs/rare_and_unseen_categories.md`.
+
+The Phase 5 encoder supports the same categorical fields and remains inactive
+for the same reason. If a field is later approved, one-hot categories are fitted
+from the training-fitted Phase 4 state only, sparse output is produced, and
+`__MISSING__`, `__RARE__`, and `__UNKNOWN__` receive explicit encoded columns.
+See `docs/categorical_encoding.md`.

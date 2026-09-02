@@ -105,4 +105,5 @@ activated in Phase 3.
 This Phase 3 handler performs no rare grouping, unseen-category mapping,
 numeric filling, encoding, scaling, combined transformation, model-matrix
 creation, or model training. Phase 4 consumes its explicit missing token
-without changing its meaning.
+without changing its meaning, and Phase 5 later encodes that token as a
+separate one-hot column only for policy-active categorical fields.

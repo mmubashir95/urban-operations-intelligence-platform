@@ -316,7 +316,8 @@ def build_categorical_tables(
             ("count", config.rare_count_candidates), ("share", config.rare_share_candidates)
         ):
             for threshold in thresholds:
-                rare = set(counts.index[counts.le(threshold if threshold_type == "count" else threshold * len(train))])
+                cutoff = threshold if threshold_type == "count" else threshold * len(train)
+                rare = set(counts.index[counts.lt(cutoff)])
                 affected = {
                     name: int(_category_values(getattr(source, name)[feature]).isin(rare).sum())
                     for name in ("train", "validation", "test")

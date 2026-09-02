@@ -50,9 +50,7 @@ def test_notebook_code_does_not_implement_preprocessing_or_modelling() -> None:
     )
 
     forbidden_code = (
-        "sklearn",
         "SimpleImputer",
-        "OneHotEncoder",
         "StandardScaler",
         "ColumnTransformer",
         "LogisticRegression",
@@ -67,6 +65,7 @@ def test_notebook_code_does_not_implement_preprocessing_or_modelling() -> None:
     assert all(token not in code for token in forbidden_code)
     assert "load_feature_policy" in code
     assert "validate_feature_policy_evidence" in code
+    assert "fit_categorical_encoder" in code
     assert "before_states == after_states" in code
     legacy_identifier = "phase" + "_1"
     assert legacy_identifier not in code
@@ -151,3 +150,30 @@ def test_notebook_contains_rare_unseen_training_only_sequence() -> None:
     assert "TRAIN ONLY" in all_text
     assert "Categorical encoding" in all_text
     assert "categorical_encoding_implemented': False" in all_text
+
+
+def test_notebook_contains_categorical_encoding_training_only_sequence() -> None:
+    notebook = _notebook()
+    all_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+
+    for heading in (
+        "## Categorical Encoding",
+        "### A. Scope and production decision",
+        "### B. One-hot strategy and token vocabulary",
+        "### C. Training-only fitted encoder state",
+        "### D. Schema, sparsity, and reconciliation evidence",
+        "### E. Phase 5 completion decision",
+    ):
+        assert heading in all_text
+    assert "fit_categorical_encoder" in all_text
+    assert "transform_split_categorical_encoder" in all_text
+    assert "build_categorical_encoding_evidence" in all_text
+    assert "OneHotEncoder" in all_text
+    assert "handle_unknown=\"ignore\"" in all_text
+    assert "drop=None" in all_text
+    assert "sparse output" in all_text
+    assert "explicit `__MISSING__`, `__RARE__`, and `__UNKNOWN__` columns" in all_text
+    assert "COMPLETE -- GOVERNED NO-OP" in all_text
+    assert "Numeric preprocessing" in all_text
+    assert "numeric_preprocessing_implemented': False" in all_text
+    assert "model_training_implemented': False" in all_text

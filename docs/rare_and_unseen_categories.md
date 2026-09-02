@@ -28,13 +28,15 @@ handler generated them.
 
 Notebook 10 evaluated absolute count thresholds 10, 25, and 50 and relative
 frequency thresholds 0.1%, 0.5%, and 1% using training data only. The evidence
-is in `reports/11_split_aware_eda/tables/rare_category_analysis.csv`.
+is in `reports/11_split_aware_eda/tables/rare_category_analysis.csv`. The
+canonical operator is strict: `count < min_count` maps to `__RARE__`, while
+`count >= min_count` is retained.
 
 | Supported field | Training cardinality | Count < 10 result | Decision |
 | --- | ---: | ---: | --- |
 | `borough` | 5 | 0 categories / 0 rows | No rare grouping indicated |
 | `location_type` | 4 | 0 categories / 0 rows | No rare grouping indicated |
-| `incident_zip` | 175 | 37 categories / 160 rows (0.675%) | Candidate only; field remains inactive |
+| `incident_zip` | 175 | 33 categories / 120 rows (0.506%) | Candidate only; field remains inactive |
 
 The versioned configuration selects `minimum_count` with `min_count: 10` as
 the lowest evaluated absolute-count candidate. It is simple, deterministic,
@@ -78,7 +80,9 @@ semantic reconciliation. No split or feature artifact is written in Phase 4.
 
 Phase 4 does not activate conditional fields, refit Phase 3, infer categories,
 use target values, fit on validation/test data, encode categories, build a
-`ColumnTransformer`, persist preprocessing, or train a model. Latitude and
-longitude remain conditional with missing-value handling deferred.
+`ColumnTransformer`, persist preprocessing, or train a model. Phase 5 consumes
+the Phase 4 output for one-hot encoding without changing missing, rare, or
+unseen semantics. Latitude and longitude remain conditional with missing-value
+handling deferred.
 
-Next work: **Categorical encoding**.
+Next work: **Numeric preprocessing** after Phase 5 categorical encoding.

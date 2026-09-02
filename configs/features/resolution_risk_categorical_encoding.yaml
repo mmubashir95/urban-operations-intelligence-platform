@@ -1,0 +1,24 @@
+config_version: 1
+strategy: one_hot
+
+supported_columns:
+  - borough
+  - location_type
+  - incident_zip
+
+cardinality_authority: configs/features/resolution_risk_categorical_cardinality.yaml
+token_authority: configs/features/resolution_risk_categorical_missing.yaml
+
+reserved_token_policy:
+  include_missing: true
+  include_rare: true
+  include_unknown: true
+  reason: Keep Phase 3 and Phase 4 sentinel meanings explicit in the encoded schema, even when a token is absent from the current training rows.
+
+one_hot:
+  handle_unknown: ignore
+  drop: null
+  sparse_output: true
+
+production_decision: GOVERNED_NO_OP
+production_reason: No supported categorical feature is APPROVED_CANDIDATE in the frozen baseline policy; encoding support remains inactive until policy activation and review.

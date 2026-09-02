@@ -1,5 +1,9 @@
 """Creation-time feature governance and target-label construction."""
 
+from urban_ops.features.categorical_encoding import (
+    fit_categorical_encoder,
+    transform_categorical_encoder,
+)
 from urban_ops.features.categorical_missing import (
     replace_policy_approved_categorical_missing,
 )
@@ -17,9 +21,11 @@ __all__ = [
     "build_missed_resolution_target",
     "derive_approved_temporal_features",
     "evaluate_target_eligibility",
+    "fit_categorical_encoder",
     "load_feature_policy",
     "replace_policy_approved_categorical_missing",
     "fit_rare_unseen_handler",
+    "transform_categorical_encoder",
     "transform_rare_unseen",
     "validate_feature_columns",
 ]

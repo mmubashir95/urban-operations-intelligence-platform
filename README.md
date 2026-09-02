@@ -18,6 +18,9 @@ python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 ```
 
+The Month 1 preprocessing notebooks require `scikit-learn` for the governed
+categorical encoding phase.
+
 Launch JupyterLab:
 
 ```bash
