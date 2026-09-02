@@ -27,3 +27,13 @@ Conditional fields are deliberately not described as safe. See
 `CONDITIONAL_FEATURE`, because only its final value is captured and it is
 mutable after creation by definition; there is no creation-time snapshot of
 status to conditionally approve.
+
+## Categorical preprocessing state
+
+The Phase 4 handler supports `borough`, `location_type`, and `incident_zip`,
+but support is not activation. All three remain `CONDITIONAL`, so the current
+baseline fits no categorical vocabulary and transforms none of them. If policy
+later approves one, training-fitted categories remain literal, training-known
+low-count categories use `__RARE__`, later unseen categories use `__UNKNOWN__`,
+and Phase 3 missing values remain `__MISSING__`. See
+`docs/rare_and_unseen_categories.md`.

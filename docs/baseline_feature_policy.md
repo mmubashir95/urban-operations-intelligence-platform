@@ -90,6 +90,13 @@ No missing category, median imputation, rare ZIP threshold, `__RARE__`, or
 geographic outliers remain retain-and-monitor evidence; they are not clipped
 or deleted.
 
+Phase 4 subsequently implements a policy-gated, training-only rare/unseen
+handler without changing this frozen eligibility decision. Because none of the
+three supported categorical fields is approved, the production result is a
+governed no-op. Synthetic-policy tests exercise the fit/transform lifecycle;
+the real policy continues to leave all conditional geography untouched. See
+`docs/rare_and_unseen_categories.md`.
+
 The policy now records a formal `DEFERRED` numeric-missingness decision for
 `latitude` and `longitude` while both remain `CONDITIONAL` with prediction-time
 status `UNRESOLVED`. Revisit it only if either field becomes

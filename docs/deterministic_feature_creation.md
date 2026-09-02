@@ -44,6 +44,7 @@ and row/target reconciliation helpers. Notebook 11 applies the same builder to
 train, validation, and test in memory and verifies repeatability and source
 immutability.
 
-This work does not implement missing-value treatment, category grouping,
+This phase does not implement missing-value treatment, category grouping,
 unknown-category behavior, outlier transformation, encoding, scaling, combined
-preprocessing, persisted model matrices, or modelling.
+preprocessing, persisted model matrices, or modelling. Later policy-gated
+phases consume these deterministic outputs without changing the derivations.

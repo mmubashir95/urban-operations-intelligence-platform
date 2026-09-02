@@ -49,8 +49,10 @@ only when feature policy activates the field.
 ## Separate meanings
 
 - `__MISSING__`: the source supplied no categorical value.
-- `__RARE__`: a low-support category observed in training; not implemented.
-- `__UNKNOWN__`: a real category unseen during training; not implemented.
+- `__RARE__`: a low-support category observed in training; implemented by the
+  separate Phase 4 fit/transform handler for policy-active fields.
+- `__UNKNOWN__`: a real category unseen during training; implemented by the
+  separate Phase 4 fit/transform handler for policy-active fields.
 
 The handler does not infer `borough` from ZIP or coordinates, and it does not
 replace unexpectedly missing deterministic calendar fields. Such calendar
@@ -100,5 +102,7 @@ If that trigger occurs, the governed intended design is to:
 No latitude/longitude imputation or missingness indicator is implemented or
 activated in Phase 3.
 
-No rare grouping, unseen-category mapping, numeric filling, encoding, scaling,
-combined transformer, model matrix, or model training is implemented here.
+This Phase 3 handler performs no rare grouping, unseen-category mapping,
+numeric filling, encoding, scaling, combined transformation, model-matrix
+creation, or model training. Phase 4 consumes its explicit missing token
+without changing its meaning.

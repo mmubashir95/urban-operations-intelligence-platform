@@ -63,7 +63,6 @@ def test_notebook_code_does_not_implement_preprocessing_or_modelling() -> None:
         "read_parquet(",
         "to_parquet(",
         "to_csv(",
-        "__RARE__",
     )
     assert all(token not in code for token in forbidden_code)
     assert "load_feature_policy" in code
@@ -129,3 +128,26 @@ def test_notebook_contains_categorical_missing_learning_sequence() -> None:
     assert "fit imputation values on training data only" in all_text
     assert "No coordinate imputation" in all_text
     assert "Handle Rare and Unseen Categories" in all_text
+
+
+def test_notebook_contains_rare_unseen_training_only_sequence() -> None:
+    notebook = _notebook()
+    all_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+
+    for heading in (
+        "## Rare and Unseen Categorical Handling",
+        "### A. Scope and production decision",
+        "### B. Training-only cardinality and threshold evidence",
+        "### C. Separate missing, rare, and unseen meanings",
+        "### D. Explicit training-only fitted state",
+        "### E. Governed no-op evidence and reconciliation",
+        "### F. Phase 4 completion decision",
+    ):
+        assert heading in all_text
+    assert "fit_rare_unseen_handler" in all_text
+    assert "transform_split_rare_unseen" in all_text
+    assert "build_rare_unseen_evidence" in all_text
+    assert "COMPLETE — GOVERNED NO-OP" in all_text
+    assert "TRAIN ONLY" in all_text
+    assert "Categorical encoding" in all_text
+    assert "categorical_encoding_implemented': False" in all_text

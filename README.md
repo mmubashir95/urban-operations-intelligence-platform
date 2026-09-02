@@ -329,7 +329,19 @@ implementation is `urban_ops.features.categorical_missing`.
 
 The frozen feature policy remains authoritative: `borough`, `location_type`,
 and `incident_zip` are still conditional, so configuration support does not
-activate or transform them in the current baseline. The implementation learns
-no statistics and performs no numeric filling, rare or unseen category
-handling, encoding, scaling, combined preprocessing, or modelling. See
+activate or transform them in the current baseline. See
 `docs/categorical_missing_values.md` for the contract and deferred boundaries.
+
+## Rare and unseen categorical handling
+
+Phase 4 adds an explicit training-only fit/transform lifecycle in
+`urban_ops.features.rare_unseen`. Known low-count training categories map to
+`__RARE__`, later values absent from the frozen training vocabulary map to
+`__UNKNOWN__`, and `__MISSING__` remains unchanged. The minimum-count candidate
+and its Notebook 10 evidence are recorded in
+`configs/features/resolution_risk_categorical_cardinality.yaml`.
+
+The real baseline has no active categorical fields, so Phase 4 is a governed
+production no-op and no conditional geography is transformed. Notebook 11
+records the decision and evidence. No categorical encoding or model training
+is implemented. See `docs/rare_and_unseen_categories.md`.

@@ -1,0 +1,20 @@
+config_version: 1
+strategy: minimum_count
+min_count: 10
+
+supported_columns:
+  - borough
+  - location_type
+  - incident_zip
+
+token_authority: configs/features/resolution_risk_categorical_missing.yaml
+rare_token: "__RARE__"
+unknown_token: "__UNKNOWN__"
+
+threshold_evidence:
+  evaluated_count_thresholds: [10, 25, 50]
+  evaluated_frequency_thresholds: [0.001, 0.005, 0.01]
+  evidence_source: reports/11_split_aware_eda/tables/rare_category_analysis.csv
+
+production_decision: GOVERNED_NO_OP
+production_reason: No supported categorical feature is APPROVED_CANDIDATE in the frozen baseline policy; the minimum-count candidate is not applied until policy activation and review.
