@@ -125,7 +125,7 @@ def build_fixture(tmp_path: Path, raw_frame: pd.DataFrame) -> PipelineFixture:
         },
         "output": {"root": str(output), "report_root": str(reports), "format": "parquet", "schema_version": "1.0"},
         "timestamps": {"columns": ["created_date", "closed_date", "due_date", "resolution_action_updated_date"], "timezone": "UTC", "invalid_policy": "preserve_and_exclude_from_target", "impute": False},
-        "categories": {"trim_columns": ["agency", "agency_name", "complaint_type", "descriptor", "descriptor_2", "status", "borough", "location_type", "open_data_channel_type"], "blank_to_null_columns": ["descriptor", "descriptor_2", "borough", "location_type"], "collapse_repeated_spaces_columns": [], "approved_mappings": {}},
+        "categories": {"trim_columns": ["agency", "agency_name", "complaint_type", "descriptor", "descriptor_2", "status", "borough", "location_type", "incident_zip", "open_data_channel_type"], "blank_to_null_columns": ["descriptor", "descriptor_2", "borough", "location_type", "incident_zip"], "collapse_repeated_spaces_columns": [], "approved_mappings": {}},
         "duplicates": {"identifier": "unique_key", "exact_policy": "keep_deterministic", "conflict_policy": "exclude_entire_group"},
         "feature_decisions": {"all_null_columns": ["descriptor_2"], "zero_variance_columns": ["open_data_channel_type"]},
     }

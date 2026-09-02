@@ -90,6 +90,15 @@ No missing category, median imputation, rare ZIP threshold, `__RARE__`, or
 geographic outliers remain retain-and-monitor evidence; they are not clipped
 or deleted.
 
+The policy now records a formal `DEFERRED` numeric-missingness decision for
+`latitude` and `longitude` while both remain `CONDITIONAL` with prediction-time
+status `UNRESOLVED`. Revisit it only if either field becomes
+`APPROVED_CANDIDATE`. Any future implementation must validate coordinate pairs
+upstream, fit imputation values on training data only, reuse those fitted
+values for validation/test/inference, evaluate missingness indicators, avoid
+claiming an imputed coordinate is the true location, and persist preprocessing
+with the model pipeline. No geographic feature or numeric imputation is active.
+
 ## Exclusions
 
 The frozen policy assigns reason-specific exclusions and reconciles them to the

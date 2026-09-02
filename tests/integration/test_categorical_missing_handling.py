@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from urban_ops.cleaning.categories import clean_categories
+from urban_ops.cleaning.pipeline import load_cleaning_config
 from urban_ops.eda.pipeline import load_eda_config
 from urban_ops.eda.source import load_verified_split, resolve_split_run
 from urban_ops.features.categorical_missing import (
@@ -11,6 +13,7 @@ from urban_ops.features.categorical_missing import (
     build_categorical_missing_evidence,
     build_categorical_reconciliation_table,
     load_categorical_missing_config,
+    replace_categorical_missing,
     replace_split_categorical_missing,
 )
 from urban_ops.features.policy import load_feature_policy
@@ -23,6 +26,45 @@ MISSING_CONFIG_PATH = Path(
     "configs/features/resolution_risk_categorical_missing.yaml"
 )
 TEMPORAL_CODE_PATH = Path("src/urban_ops/features/temporal.py")
+CLEANING_CONFIG_PATH = Path("configs/data/cleaning_rules.yaml")
+
+
+def test_cleaning_normalizes_incident_zip_before_missing_token_replacement() -> None:
+    cleaning_config = load_cleaning_config(CLEANING_CONFIG_PATH)
+    missing_config = load_categorical_missing_config(MISSING_CONFIG_PATH)
+    source = pd.DataFrame(
+        {
+            "incident_zip": pd.Series(
+                [None, "", "   ", " 10001 ", "00123"], dtype="string"
+            )
+        }
+    )
+
+    cleaned, _, _ = clean_categories(
+        source,
+        trim_columns=["incident_zip"],
+        blank_to_null_columns=["incident_zip"],
+        collapse_repeated_spaces_columns=[],
+        approved_mappings={},
+    )
+    transformed = replace_categorical_missing(
+        cleaned,
+        columns=["incident_zip"],
+        missing_token=missing_config.token,
+    )
+
+    assert "incident_zip" in cleaning_config.trim_columns
+    assert "incident_zip" in cleaning_config.blank_to_null_columns
+    assert cleaned["incident_zip"].iloc[:3].isna().all()
+    assert cleaned["incident_zip"].tolist()[3:] == ["10001", "00123"]
+    assert transformed["incident_zip"].tolist() == [
+        "__MISSING__",
+        "__MISSING__",
+        "__MISSING__",
+        "10001",
+        "00123",
+    ]
+    assert str(transformed["incident_zip"].dtype) == "string"
 
 
 def test_split_wide_categorical_handling_preserves_governance_and_sources(

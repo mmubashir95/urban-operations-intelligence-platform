@@ -120,4 +120,12 @@ def test_notebook_contains_categorical_missing_learning_sequence() -> None:
         assert heading in all_text
     assert "replace_split_categorical_missing" in all_text
     assert "build_categorical_missing_evidence" in all_text
+    assert "incident_zip" in all_text
+    assert "blank normalization" in all_text
+    assert "in-memory" in all_text
+    assert "serialization/reload" in all_text
+    assert "prediction-time status `UNRESOLVED`" in all_text
+    assert "missing-value handling status `DEFERRED`" in all_text
+    assert "fit imputation values on training data only" in all_text
+    assert "No coordinate imputation" in all_text
     assert "Handle Rare and Unseen Categories" in all_text

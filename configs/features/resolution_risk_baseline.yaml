@@ -48,6 +48,27 @@ implementation_boundary:
   column_transformer_built: false
   feature_matrix_created: false
   model_trained: false
+  numeric_missingness:
+    status: DEFERRED
+    reason: Fitted preprocessing must not be defined for features that are not approved for the baseline.
+    trigger_feature_status: APPROVED_CANDIDATE
+    features:
+      latitude:
+        current_feature_status: CONDITIONAL
+        prediction_time_status: UNRESOLVED
+        missing_value_handling_status: DEFERRED
+      longitude:
+        current_feature_status: CONDITIONAL
+        prediction_time_status: UNRESOLVED
+        missing_value_handling_status: DEFERRED
+    design_if_approved:
+      - Validate the coordinate pair upstream before feature preprocessing.
+      - Normalize invalid or impossible coordinates to missing in validation or cleaning and record audit counts.
+      - Fit numeric imputation values using training data only.
+      - Apply training-fitted values to validation, test, and inference data.
+      - Evaluate latitude_missing and longitude_missing indicators before production use.
+      - Treat imputed coordinates as technical placeholders, never as the complaint's true location.
+      - Persist fitted preprocessing with the model pipeline.
 
 features:
   - feature_name: created_date

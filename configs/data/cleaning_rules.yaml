@@ -31,12 +31,14 @@ categories:
     - status
     - borough
     - location_type
+    - incident_zip
     - open_data_channel_type
   blank_to_null_columns:
     - descriptor
     - descriptor_2
     - borough
     - location_type
+    - incident_zip
   collapse_repeated_spaces_columns: []
   approved_mappings: {}
 

@@ -1,5 +1,6 @@
 """Tests for deterministic, governed categorical missing-value handling."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -163,6 +164,25 @@ def test_repeat_application_is_value_identical() -> None:
     pd.testing.assert_frame_equal(once, twice)
 
 
+def test_round_trip_without_provenance_fails_loudly_on_token_collision(
+    tmp_path: Path,
+) -> None:
+    source = _identity_frame(["Residential", pd.NA])
+    transformed = replace_categorical_missing(
+        source, columns=["location_type"], missing_token="__MISSING__"
+    )
+    persisted = tmp_path / "categorical.csv"
+    transformed.to_csv(persisted, index=False)
+    reloaded = pd.read_csv(persisted, dtype={"location_type": "string"})
+
+    with pytest.raises(CategoricalMissingError, match="source collision"):
+        replace_categorical_missing(
+            reloaded,
+            columns=["location_type"],
+            missing_token="__MISSING__",
+        )
+
+
 def test_handler_is_non_mutating_and_preserves_identity_order_and_target() -> None:
     source = _identity_frame(["Residential", pd.NA, "Commercial"])
     snapshot = source.copy(deep=True)
@@ -231,6 +251,73 @@ def test_governed_handler_leaves_conditional_and_excluded_values_unchanged() -> 
 
     pd.testing.assert_frame_equal(result, snapshot)
     pd.testing.assert_frame_equal(source, snapshot)
+
+
+def test_synthetic_approved_policy_activates_borough_and_reconciles() -> None:
+    production_policy_bytes = POLICY_PATH.read_bytes()
+    policy = load_feature_policy(POLICY_PATH)
+    config = load_categorical_missing_config(CONFIG_PATH)
+    synthetic_features = tuple(
+        replace(
+            entry,
+            policy_status=PolicyStatus.APPROVED_CANDIDATE,
+            prediction_time_status="AVAILABLE",
+            leakage_status="SAFE",
+            eda_status="CANDIDATE",
+            phase_2_allowed=True,
+        )
+        if entry.feature_name == "borough"
+        else entry
+        for entry in policy.features
+    )
+    synthetic_policy = replace(policy, features=synthetic_features)
+    frame = pd.DataFrame(
+        {
+            "borough": pd.Series([pd.NA, "BROOKLYN"], dtype="string"),
+            "location_type": pd.Series(["Residential", pd.NA], dtype="string"),
+            "incident_zip": pd.Series(["10001", pd.NA], dtype="string"),
+        }
+    )
+    source = {name: frame.copy(deep=True) for name in ("train", "validation", "test")}
+
+    transformed = replace_split_categorical_missing(
+        source, policy=synthetic_policy, config=config
+    )
+    evidence = build_categorical_missing_evidence(
+        source, transformed, policy=synthetic_policy, config=config
+    )
+
+    assert transformed["train"]["borough"].tolist() == [
+        "__MISSING__",
+        "BROOKLYN",
+    ]
+    borough_evidence = evidence.loc[evidence["feature_name"].eq("borough")]
+    assert borough_evidence["active"].eq(True).all()
+    assert borough_evidence["transformation_applied"].eq(True).all()
+    assert borough_evidence["reconciled"].eq(True).all()
+    assert POLICY_PATH.read_bytes() == production_policy_bytes
+
+
+def test_numeric_missingness_is_formally_deferred_for_conditional_coordinates() -> None:
+    policy = load_feature_policy(POLICY_PATH)
+    decision = policy.implementation_boundary["numeric_missingness"]
+
+    assert decision["status"] == "DEFERRED"
+    assert decision["trigger_feature_status"] == "APPROVED_CANDIDATE"
+    for feature_name in ("latitude", "longitude"):
+        feature_decision = decision["features"][feature_name]
+        assert policy.by_name[feature_name].policy_status is PolicyStatus.CONDITIONAL
+        assert policy.by_name[feature_name].prediction_time_status == "UNRESOLVED"
+        assert feature_decision == {
+            "current_feature_status": "CONDITIONAL",
+            "prediction_time_status": "UNRESOLVED",
+            "missing_value_handling_status": "DEFERRED",
+        }
+    design = " ".join(decision["design_if_approved"])
+    assert "training data only" in design
+    assert "validation, test, and inference" in design
+    assert "latitude_missing and longitude_missing" in design
+    assert "Persist fitted preprocessing" in design
 
 
 def test_split_evidence_and_reconciliation_report_inactive_policy_truthfully() -> None:

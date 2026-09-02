@@ -16,6 +16,33 @@ def clean(frame: pd.DataFrame, **overrides: object):
     return clean_categories(frame, **options)
 
 
+def test_incident_zip_blanks_are_null_and_valid_text_is_trimmed() -> None:
+    frame = pd.DataFrame({
+        "descriptor": ["x"] * 5,
+        "status": ["Closed"] * 5,
+        "borough": ["QUEENS"] * 5,
+        "incident_zip": pd.Series(
+            [None, "", "   ", " 10001 ", "00123"], dtype="string"
+        ),
+        "open_data_channel_type": ["UNKNOWN"] * 5,
+    })
+
+    result, audit, _ = clean(
+        frame,
+        trim_columns=[
+            "descriptor", "status", "borough", "incident_zip",
+            "open_data_channel_type",
+        ],
+        blank_to_null_columns=["descriptor", "incident_zip"],
+    )
+
+    assert result["incident_zip"].iloc[:3].isna().all()
+    assert result["incident_zip"].tolist()[3:] == ["10001", "00123"]
+    assert str(result["incident_zip"].dtype) == "string"
+    zip_audit = audit.loc[audit["source_column"].eq("incident_zip")]
+    assert set(zip_audit["mapping_type"]) == {"trim", "blank_to_null"}
+
+
 def test_approved_trim_and_blank_to_null_are_audited() -> None:
     frame = pd.DataFrame({
         "descriptor": ["  value  ", "   "], "status": [" Closed ", "Closed"],

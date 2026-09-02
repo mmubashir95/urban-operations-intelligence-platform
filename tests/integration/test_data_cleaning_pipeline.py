@@ -132,8 +132,8 @@ def test_validation_to_cleaning_flow_is_governed_atomic_and_non_mutating(
         row("due-before", due_date="2023-12-31T00:00:00.000"),
         row("exact"), row("exact"),
         row("conflict"), row("conflict", status="Pending"),
-        row("blank", descriptor="   ", location_type=" "),
-        row("whitespace", status=" Closed "),
+        row("blank", descriptor="   ", location_type=" ", incident_zip="   "),
+        row("whitespace", status=" Closed ", incident_zip=" 10001 "),
         row("case", status="closed"),
         row("geo", borough="Unspecified", latitude=None, longitude=None),
     ]
@@ -168,6 +168,9 @@ def test_validation_to_cleaning_flow_is_governed_atomic_and_non_mutating(
     assert cleaned.loc[cleaned["unique_key"].eq("missing-closed"), "closed_date"].isna().all()
     assert cleaned.loc[cleaned["unique_key"].eq("closed-before"), "closed_date"].iloc[0] < cleaned.loc[cleaned["unique_key"].eq("closed-before"), "created_date"].iloc[0]
     assert pd.isna(cleaned.loc[cleaned["unique_key"].eq("blank"), "descriptor"].iloc[0])
+    assert pd.isna(cleaned.loc[cleaned["unique_key"].eq("blank"), "incident_zip"].iloc[0])
+    assert cleaned.loc[cleaned["unique_key"].eq("whitespace"), "incident_zip"].iloc[0] == "10001"
+    assert str(cleaned["incident_zip"].dtype) == "string"
     assert cleaned.loc[cleaned["unique_key"].eq("geo"), "borough"].iloc[0] == "Unspecified"
     assert cleaned["open_data_channel_type"].eq("UNKNOWN").all()
     assert set(eligible.set_index("unique_key").loc[["on-time", "late", "equal"], "missed_resolution_target"].astype(int)) == {0, 1}
