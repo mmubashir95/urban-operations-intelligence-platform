@@ -55,3 +55,15 @@ deterministic ordering; no numeric statistics are learned.
 the numeric output. Targets, identifiers, and leakage fields are excluded by
 allowlist rather than broad numeric dtype discovery. See
 `docs/numeric_preprocessing.md`.
+
+## Composed preprocessing state
+
+Phase 7 composes the Phase 5 categorical CSR block and Phase 6 numeric CSR
+block into one final sparse model-ready matrix. The frozen order is categorical
+encoded feature names first, followed by numeric feature names. In the current
+production policy this yields the four numeric temporal features only:
+`created_hour`, `created_day_of_week`, `created_month`, and `is_weekend`.
+
+The composed state records upstream fingerprints and a deterministic final
+feature-name schema. It does not train a model or relearn any upstream
+preprocessing state. See `docs/preprocessing_composition.md`.

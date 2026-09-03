@@ -90,7 +90,9 @@ train a model, or evaluate a model.
 
 Latitude and longitude remain conditional with numeric missingness deferred.
 
-Phase 6 now handles numeric preprocessing separately as deterministic
-pass-through for approved temporal features. See `docs/numeric_preprocessing.md`.
+Phase 6 handles numeric preprocessing separately as deterministic pass-through
+for approved temporal features. Phase 7 composes the categorical and numeric
+CSR blocks without refitting this encoder. See
+`docs/preprocessing_composition.md`.
 
-Next work after Phase 6: **Preprocessing pipeline composition**.
+Next work after Phase 7: **Final preprocessing verification**.

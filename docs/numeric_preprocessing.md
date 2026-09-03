@@ -87,8 +87,12 @@ preprocessing blocks.
 
 ## Boundary
 
-Phase 6 does not combine numeric and categorical matrices, build a
-`ColumnTransformer`, fit a model pipeline, train a model, evaluate a model,
-activate conditional geography, or implement coordinate imputation.
+Phase 6 does not build a `ColumnTransformer`, fit a model pipeline, train a
+model, evaluate a model, activate conditional geography, or implement
+coordinate imputation.
 
-Next work: **Preprocessing pipeline composition**.
+Phase 7 now composes this numeric CSR block with the separate categorical CSR
+block without changing numeric semantics. See
+`docs/preprocessing_composition.md`.
+
+Next work after Phase 7: **Final preprocessing verification**.

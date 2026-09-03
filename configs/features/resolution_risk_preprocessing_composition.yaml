@@ -1,0 +1,16 @@
+config_version: 1
+
+composition_order:
+  - categorical
+  - numeric
+
+matrix_type: csr_matrix
+output_dtype: float64
+learned_statistics: none
+
+required_upstream_phases:
+  categorical_encoding: phase_5
+  numeric_preprocessing: phase_6
+
+row_alignment: Matrix row i corresponds positionally to source frame row i; sparse matrices do not carry the DataFrame index.
+decision_reason: Compose the already governed categorical and numeric CSR blocks without re-learning upstream preprocessing or training a model.

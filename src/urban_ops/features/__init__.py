@@ -18,6 +18,13 @@ from urban_ops.features.numeric_preprocessing import (
     transform_numeric_preprocessor,
 )
 from urban_ops.features.policy import load_feature_policy
+from urban_ops.features.preprocessing_composition import (
+    build_preprocessing_composition,
+    build_preprocessing_composition_evidence,
+    compose_preprocessing_blocks,
+    compose_split_preprocessing_blocks,
+    load_preprocessing_composition_config,
+)
 from urban_ops.features.rare_unseen import (
     fit_rare_unseen_handler,
     transform_rare_unseen,
@@ -29,12 +36,17 @@ __all__ = [
     "build_missed_resolution_target",
     "active_numeric_feature_names",
     "build_numeric_preprocessing_evidence",
+    "build_preprocessing_composition",
+    "build_preprocessing_composition_evidence",
+    "compose_preprocessing_blocks",
+    "compose_split_preprocessing_blocks",
     "derive_approved_temporal_features",
     "evaluate_target_eligibility",
     "fit_categorical_encoder",
     "fit_numeric_preprocessor",
     "load_feature_policy",
     "load_numeric_preprocessing_config",
+    "load_preprocessing_composition_config",
     "replace_policy_approved_categorical_missing",
     "fit_rare_unseen_handler",
     "transform_categorical_encoder",

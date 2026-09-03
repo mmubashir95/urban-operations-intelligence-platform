@@ -66,6 +66,7 @@ def test_notebook_code_does_not_implement_preprocessing_or_modelling() -> None:
     assert "load_feature_policy" in code
     assert "validate_feature_policy_evidence" in code
     assert "fit_categorical_encoder" in code
+    assert "build_preprocessing_composition" in code
     assert "before_states == after_states" in code
     legacy_identifier = "phase" + "_1"
     assert legacy_identifier not in code
@@ -205,3 +206,30 @@ def test_notebook_contains_numeric_preprocessing_pass_through_sequence() -> None
     assert "coordinate_imputation_implemented': False" in all_text
     assert "phase_7_composition_implemented': False" in all_text
     assert "Preprocessing Pipeline Composition" in all_text
+
+
+def test_notebook_contains_preprocessing_composition_sequence() -> None:
+    notebook = _notebook()
+    all_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+
+    for heading in (
+        "## Preprocessing Pipeline Composition",
+        "### A. Scope and upstream block contracts",
+        "### B. Frozen composition state",
+        "### C. Compose train, validation, and test matrices",
+        "### D. Schema, fingerprint, leakage, and immutability checks",
+        "### E. Phase 7 completion decision",
+    ):
+        assert heading in all_text
+    assert "build_preprocessing_composition" in all_text
+    assert "compose_split_preprocessing_blocks" in all_text
+    assert "build_preprocessing_composition_evidence" in all_text
+    assert "categorical columns first" in all_text
+    assert "numeric columns second" in all_text
+    assert "combined_feature_names" in all_text
+    assert "upstream_fingerprints_recorded" in all_text
+    assert "source_artifacts_unchanged" in all_text
+    assert "conditional_geography_activated': False" in all_text
+    assert "model_training_implemented': False" in all_text
+    assert "model_evaluation_implemented': False" in all_text
+    assert "Final Preprocessing Verification" in all_text

@@ -110,6 +110,13 @@ validated, ordered, and materialized into a separate numeric matrix without
 scaling or imputation. Invalid or null deterministic temporal values fail
 loudly instead of being repaired. See `docs/numeric_preprocessing.md`.
 
+Phase 7 subsequently composes the already-governed categorical and numeric
+preprocessing blocks into one CSR model-ready matrix. The current production
+matrix has zero categorical columns plus four numeric temporal columns, ordered
+as `created_hour`, `created_day_of_week`, `created_month`, and `is_weekend`.
+The composition records upstream fingerprints and does not refit earlier
+stages or train a model. See `docs/preprocessing_composition.md`.
+
 The policy now records a formal `DEFERRED` numeric-missingness decision for
 `latitude` and `longitude` while both remain `CONDITIONAL` with prediction-time
 status `UNRESOLVED`. Revisit it only if either field becomes
