@@ -1,0 +1,52 @@
+config_version: 1
+production_decision: ACTIVE
+
+supported_columns:
+  - created_hour
+  - created_day_of_week
+  - created_month
+  - is_weekend
+  - latitude
+  - longitude
+
+feature_rules:
+  created_hour:
+    strategy: pass_through
+    value_type: integer
+    minimum: 0
+    maximum: 23
+    rationale: Raw hour is the frozen Month 1 temporal representation; cyclic alternatives are deferred for later comparison.
+  created_day_of_week:
+    strategy: pass_through
+    value_type: integer
+    minimum: 0
+    maximum: 6
+    rationale: Raw weekday integer is the frozen Month 1 temporal representation; cyclic alternatives are deferred for later comparison.
+  created_month:
+    strategy: pass_through
+    value_type: integer
+    minimum: 1
+    maximum: 12
+    rationale: Raw month integer is the frozen Month 1 temporal representation; cyclic alternatives are deferred for later comparison.
+  is_weekend:
+    strategy: pass_through
+    value_type: binary
+    minimum: 0
+    maximum: 1
+    rationale: Binary weekend indicator is already model-ready and requires no scaling.
+  latitude:
+    strategy: deferred
+    value_type: continuous
+    rationale: Conditional geography remains prediction-time unresolved; numeric missingness and scaling are deferred until policy approval.
+  longitude:
+    strategy: deferred
+    value_type: continuous
+    rationale: Conditional geography remains prediction-time unresolved; numeric missingness and scaling are deferred until policy approval.
+
+output:
+  matrix_type: csr_matrix
+  dtype: float64
+  row_alignment: Matrix row i corresponds positionally to source frame row i; sparse matrices do not carry the DataFrame index.
+
+learned_statistics: none
+decision_reason: Approved deterministic temporal fields are non-null bounded derivations from created_date and are passed through for the interpretable Month 1 baseline. No scaling or imputation is justified for the current active numeric feature set.

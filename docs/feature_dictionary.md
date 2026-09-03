@@ -43,3 +43,15 @@ for the same reason. If a field is later approved, one-hot categories are fitted
 from the training-fitted Phase 4 state only, sparse output is produced, and
 `__MISSING__`, `__RARE__`, and `__UNKNOWN__` receive explicit encoded columns.
 See `docs/categorical_encoding.md`.
+
+## Numeric preprocessing state
+
+Phase 6 actively preprocesses only the approved deterministic temporal numeric
+features: `created_hour`, `created_day_of_week`, `created_month`, and
+`is_weekend`. The strategy is pass-through with domain validation and
+deterministic ordering; no numeric statistics are learned.
+
+`latitude` and `longitude` remain conditional/deferred and are excluded from
+the numeric output. Targets, identifiers, and leakage fields are excluded by
+allowlist rather than broad numeric dtype discovery. See
+`docs/numeric_preprocessing.md`.

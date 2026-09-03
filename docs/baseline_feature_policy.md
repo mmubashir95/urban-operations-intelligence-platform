@@ -103,6 +103,13 @@ policy because no supported categorical feature is approved. The encoder keeps
 `__MISSING__`, `__RARE__`, and `__UNKNOWN__` as explicit columns when a field is
 activated by a future governed policy. See `docs/categorical_encoding.md`.
 
+Phase 6 subsequently implements numeric preprocessing for the approved
+temporal fields. The production decision is deterministic pass-through:
+`created_hour`, `created_day_of_week`, `created_month`, and `is_weekend` are
+validated, ordered, and materialized into a separate numeric matrix without
+scaling or imputation. Invalid or null deterministic temporal values fail
+loudly instead of being repaired. See `docs/numeric_preprocessing.md`.
+
 The policy now records a formal `DEFERRED` numeric-missingness decision for
 `latitude` and `longitude` while both remain `CONDITIONAL` with prediction-time
 status `UNRESOLVED`. Revisit it only if either field becomes

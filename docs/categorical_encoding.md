@@ -84,10 +84,13 @@ because no supported categorical field is approved.
 ## Boundary
 
 Phase 5 does not activate conditional fields, change Phase 3 missing semantics,
-change Phase 4 rare/unseen semantics, fit numeric preprocessing, scale values,
-build a `ColumnTransformer`, create a combined model matrix, persist a model
-pipeline, train a model, or evaluate a model.
+change Phase 4 rare/unseen semantics, scale values, build a
+`ColumnTransformer`, create a combined model matrix, persist a model pipeline,
+train a model, or evaluate a model.
 
 Latitude and longitude remain conditional with numeric missingness deferred.
 
-Next work: **Numeric preprocessing**.
+Phase 6 now handles numeric preprocessing separately as deterministic
+pass-through for approved temporal features. See `docs/numeric_preprocessing.md`.
+
+Next work after Phase 6: **Preprocessing pipeline composition**.

@@ -48,3 +48,7 @@ This phase does not implement missing-value treatment, category grouping,
 unknown-category behavior, outlier transformation, encoding, scaling, combined
 preprocessing, persisted model matrices, or modelling. Later policy-gated
 phases consume these deterministic outputs without changing the derivations.
+
+Phase 6 consumes the four approved temporal outputs as deterministic numeric
+pass-through features. Nulls or out-of-domain values in those columns remain
+contract violations from this phase and are rejected rather than imputed.

@@ -177,3 +177,31 @@ def test_notebook_contains_categorical_encoding_training_only_sequence() -> None
     assert "Numeric preprocessing" in all_text
     assert "numeric_preprocessing_implemented': False" in all_text
     assert "model_training_implemented': False" in all_text
+
+
+def test_notebook_contains_numeric_preprocessing_pass_through_sequence() -> None:
+    notebook = _notebook()
+    all_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+
+    for heading in (
+        "## Numeric Preprocessing",
+        "### A. Scope and production decision",
+        "### B. Per-feature strategy and cyclic semantics",
+        "### C. Explicit numeric state and pass-through matrix",
+        "### D. Domain validation, leakage exclusion, and row alignment",
+        "### E. Phase 6 completion decision",
+    ):
+        assert heading in all_text
+    assert "fit_numeric_preprocessor" in all_text
+    assert "transform_split_numeric_preprocessor" in all_text
+    assert "build_numeric_preprocessing_evidence" in all_text
+    assert "created_hour" in all_text
+    assert "created_day_of_week" in all_text
+    assert "created_month" in all_text
+    assert "is_weekend" in all_text
+    assert "deterministic pass-through" in all_text
+    assert "learned_statistics_absent" in all_text
+    assert "latitude_longitude_deferred" in all_text
+    assert "coordinate_imputation_implemented': False" in all_text
+    assert "phase_7_composition_implemented': False" in all_text
+    assert "Preprocessing Pipeline Composition" in all_text
