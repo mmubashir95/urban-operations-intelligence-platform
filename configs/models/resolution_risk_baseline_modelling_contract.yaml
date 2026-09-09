@@ -1,0 +1,16 @@
+contract_version: 1
+modelling_policy_version: 1
+
+required_splits:
+  - train
+  - validation
+  - test
+
+phase_8_required_status: FROZEN_MODEL_READY
+matrix_type: csr_matrix
+output_dtype: float64
+target_domain: [0, 1]
+require_both_train_classes: true
+contract_status: MODEL_INPUTS_VERIFIED
+train_only_target_statistics: true
+decision_reason: Validate metadata and object boundaries for future baseline models without training, scoring, transforming, sorting, or modifying preprocessing.
