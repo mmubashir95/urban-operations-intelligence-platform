@@ -117,6 +117,13 @@ as `created_hour`, `created_day_of_week`, `created_month`, and `is_weekend`.
 The composition records upstream fingerprints and does not refit earlier
 stages or train a model. See `docs/preprocessing_composition.md`.
 
+Phase 8 subsequently verifies the complete Phase 2–7 path without changing
+this policy. It checks the final CSR schema, X/y/identifier alignment,
+chronology, finiteness, training variation, policy lineage, conditional
+geography exclusion, deterministic output, and the Phase 4–7 fingerprint
+chain. A successful gate freezes preprocessing for baseline modelling. See
+docs/preprocessing_verification.md.
+
 The policy now records a formal `DEFERRED` numeric-missingness decision for
 `latitude` and `longitude` while both remain `CONDITIONAL` with prediction-time
 status `UNRESOLVED`. Revisit it only if either field becomes

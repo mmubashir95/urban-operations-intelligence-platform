@@ -102,4 +102,9 @@ encoder categories, redo numeric validation policy, activate conditional
 geography, build a sklearn `Pipeline`, build a `ColumnTransformer`, train
 `LogisticRegression`, calculate model metrics, or persist model artifacts.
 
-Next work: **Final preprocessing verification**.
+Phase 8 now verifies this composed output against its targets, identifiers,
+chronology, feature policy, sparse format, finite-value contract, train-only
+variance, and complete upstream fingerprint chain. A successful check freezes
+the schema for baseline modelling. See docs/preprocessing_verification.md.
+
+Next work: **Baseline Modelling** after successful Phase 8 verification.

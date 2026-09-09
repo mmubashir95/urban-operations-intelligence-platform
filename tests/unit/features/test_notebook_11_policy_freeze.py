@@ -54,7 +54,6 @@ def test_notebook_code_does_not_implement_preprocessing_or_modelling() -> None:
         "StandardScaler",
         "ColumnTransformer",
         "LogisticRegression",
-        "X_train",
         ".fit(",
         ".fit_transform(",
         ".transform(",
@@ -233,3 +232,47 @@ def test_notebook_contains_preprocessing_composition_sequence() -> None:
     assert "model_training_implemented': False" in all_text
     assert "model_evaluation_implemented': False" in all_text
     assert "Final Preprocessing Verification" in all_text
+
+
+def test_notebook_contains_final_preprocessing_verification_and_stop_boundary() -> None:
+    notebook = _notebook()
+    all_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+    code = "\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+
+    for heading in (
+        "## Final Preprocessing Verification",
+        "### A. Final X / y / identifier separation",
+        "### B. Frozen contract and authoritative feature schema",
+        "### C. Per-split readiness and train-only variance evidence",
+        "### D. Fingerprint, determinism, leakage, and immutability checks",
+        "### E. Phase 8 completion decision",
+        "## STOP — Baseline Modelling Boundary",
+    ):
+        assert heading in all_text
+    for token in (
+        "verify_preprocessing_contract",
+        "build_final_feature_schema_evidence",
+        "build_preprocessing_verification_evidence",
+        "build_training_feature_variance_evidence",
+        "VerifiedPreprocessingContract.from_dict",
+        "X_train",
+        "y_train",
+        "identifier_train",
+        "source_artifacts_unchanged",
+        "FROZEN / MODEL-READY",
+        "Baseline Modelling",
+    ):
+        assert token in all_text
+    forbidden_model_calls = (
+        "LogisticRegression(",
+        "DummyClassifier(",
+        ".predict(",
+        ".predict_proba(",
+        ".fit(",
+        ".fit_transform(",
+    )
+    assert all(token not in code for token in forbidden_model_calls)

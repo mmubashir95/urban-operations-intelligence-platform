@@ -67,3 +67,19 @@ production policy this yields the four numeric temporal features only:
 The composed state records upstream fingerprints and a deterministic final
 feature-name schema. It does not train a model or relearn any upstream
 preprocessing state. See `docs/preprocessing_composition.md`.
+
+## Final verified model-input state
+
+Phase 8 reconciles every final column to explicit fitted-state lineage and the
+frozen feature policy. The authoritative current schema is:
+
+| Index | Feature | Source branch | Source feature |
+| ---: | --- | --- | --- |
+| 0 | created_hour | numeric | created_hour |
+| 1 | created_day_of_week | numeric | created_day_of_week |
+| 2 | created_month | numeric | created_month |
+| 3 | is_weekend | numeric | is_weekend |
+
+Targets and unique_key identifiers remain separate, positionally aligned
+vectors. Conditional geography and all leakage/excluded fields remain absent.
+See docs/preprocessing_verification.md.

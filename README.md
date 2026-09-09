@@ -348,3 +348,17 @@ The real baseline has no active categorical fields, so Phase 4 is a governed
 production no-op and no conditional geography is transformed. Notebook 11
 records the decision and evidence. No categorical encoding or model training
 is implemented. See `docs/rare_and_unseen_categories.md`.
+
+## Final preprocessing verification
+
+Notebook 11 now completes Phase 8 by independently verifying the Phase 2–7
+output and freezing its model-input contract. The reusable gate lives in
+urban_ops.features.preprocessing_verification. It checks CSR/float64 format,
+finite values, exact schema, X/y/unique_key alignment, chronological order,
+target validity, train-only feature variation, leakage and conditional
+geography exclusion, and the Phase 4–7 fingerprint chain.
+
+The production schema contains created_hour, created_day_of_week,
+created_month, and is_weekend; row counts are derived from authoritative
+splits. No model is trained or evaluated. See
+docs/preprocessing_verification.md.

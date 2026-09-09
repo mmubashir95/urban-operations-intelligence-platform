@@ -1,0 +1,23 @@
+verification_version: 1
+
+required_splits:
+  - train
+  - validation
+  - test
+
+matrix_type: csr_matrix
+output_dtype: float64
+target_domain: [0, 1]
+require_both_train_classes: true
+zero_variance_action: fail
+verification_status: FROZEN_MODEL_READY
+baseline_estimator_compatibility: sklearn.linear_model.LogisticRegression
+
+required_upstream_phases:
+  rare_unseen: phase_4
+  categorical_encoding: phase_5
+  numeric_preprocessing: phase_6
+  preprocessing_composition: phase_7
+
+row_alignment: Matrix row i, target position i, and identifier position i must refer to the same source complaint.
+decision_reason: Verify and freeze the existing Phase 2-7 preprocessing output without learning state, changing features, or training a model.

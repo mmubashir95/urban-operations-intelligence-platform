@@ -25,6 +25,14 @@ from urban_ops.features.preprocessing_composition import (
     compose_split_preprocessing_blocks,
     load_preprocessing_composition_config,
 )
+from urban_ops.features.preprocessing_verification import (
+    VerifiedPreprocessingContract,
+    build_final_feature_schema_evidence,
+    build_preprocessing_verification_evidence,
+    build_training_feature_variance_evidence,
+    load_preprocessing_verification_config,
+    verify_preprocessing_contract,
+)
 from urban_ops.features.rare_unseen import (
     fit_rare_unseen_handler,
     transform_rare_unseen,
@@ -38,6 +46,9 @@ __all__ = [
     "build_numeric_preprocessing_evidence",
     "build_preprocessing_composition",
     "build_preprocessing_composition_evidence",
+    "build_final_feature_schema_evidence",
+    "build_preprocessing_verification_evidence",
+    "build_training_feature_variance_evidence",
     "compose_preprocessing_blocks",
     "compose_split_preprocessing_blocks",
     "derive_approved_temporal_features",
@@ -47,6 +58,7 @@ __all__ = [
     "load_feature_policy",
     "load_numeric_preprocessing_config",
     "load_preprocessing_composition_config",
+    "load_preprocessing_verification_config",
     "replace_policy_approved_categorical_missing",
     "fit_rare_unseen_handler",
     "transform_categorical_encoder",
@@ -54,4 +66,6 @@ __all__ = [
     "transform_split_numeric_preprocessor",
     "transform_rare_unseen",
     "validate_feature_columns",
+    "VerifiedPreprocessingContract",
+    "verify_preprocessing_contract",
 ]
