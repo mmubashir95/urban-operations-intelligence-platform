@@ -1,4 +1,4 @@
-"""Model-input contracts and future modelling utilities."""
+"""Model contracts, Month 1 baselines, and evaluation utilities."""
 
 from urban_ops.models.baseline_contract import (
     BaselineModellingContractConfig,

@@ -138,4 +138,83 @@ probabilities, threshold selection, calibration, feature selection, scaling,
 imputation, encoding, sklearn pipelines, model persistence, SHAP, top-K
 evaluation, or subgroup evaluation.
 
-Next work: **Phase 10 — Baseline Model Training**.
+## Month 1 Baseline Modelling Contract
+
+Target: `missed_resolution_target`.
+
+Positive class: `1 = missed expected resolution target`.
+
+Training policy: models may fit only on training data.
+
+Validation policy: validation may be used for model comparison, threshold
+selection, and approved baseline-level decisions.
+
+Test policy: test data must remain untouched until final model selection is
+frozen.
+
+Preprocessing policy: baseline models must use the existing frozen
+preprocessing outputs. They must not refit, duplicate, or redesign
+preprocessing.
+
+Split policy: the existing chronological train/validation/test split is the
+only accepted split design. Random re-splitting is prohibited.
+
+Leakage policy: no target-derived, post-creation, future, validation-derived,
+or test-derived information may enter training features or train-derived
+aggregates.
+
+Determinism: any estimator with stochastic behavior must use an explicit random
+seed. Current Month 1 estimators are deterministic under the frozen inputs.
+
+Probability policy: probability or risk scores are preserved separately from
+binary predictions. Ranking metrics use scores, not hard predictions.
+
+Threshold policy: threshold selection may use validation only. The rule-based
+historical-rate baseline selects the validation-F1 maximizing threshold from a
+deterministic candidate grid. Ties choose the highest threshold.
+
+Final test policy: final test evaluation runs only after baseline choice,
+configuration, threshold, metric definitions, and selection logic are frozen.
+Test results must not be used to change features, preprocessing, solvers,
+thresholds, fallback rules, regularization, or model selection.
+
+## Implemented Month 1 Metrics
+
+The common evaluator implements:
+
+- precision;
+- recall;
+- F1;
+- ROC-AUC;
+- PR-AUC;
+- Brier score;
+- confusion matrix counts: true negative, false positive, false negative,
+  true positive;
+- Precision@5% and Recall@5%;
+- Precision@10% and Recall@10%;
+- Precision@20% and Recall@20%.
+
+Top-K metrics rank rows by predicted risk descending and select
+`max(1, ceil(n * fraction))` rows. Ranking ties preserve original row order via
+stable sorting.
+
+For single-class `y_true`, ROC-AUC and PR-AUC are reported as `NaN`; threshold,
+confusion, Brier, precision, recall, F1, and top-K metrics remain defined.
+Empty inputs, mismatched lengths, non-binary labels, non-finite scores, and
+scores outside `[0, 1]` raise explicit errors.
+
+## Implemented Baselines
+
+- Majority Class: learns the most common training label, with deterministic
+  tie-breaking to class `0`, and reports train empirical class probabilities as
+  constant scores.
+- Historical Rate: learns `mean(missed_resolution_target)` by approved
+  creation-time group `created_month` on training rows only, with fallback to
+  global training prevalence for unseen groups.
+- Rule Based: thresholds the historical-rate score using a validation-only
+  threshold selected for F1.
+- Logistic Regression: fits sparse-compatible sklearn logistic regression
+  directly on the frozen CSR matrix with no preprocessing refit.
+
+Month 2 models such as gradient boosting, SHAP, forecasting, resolution-time
+regression, and NLP classification remain outside this contract.

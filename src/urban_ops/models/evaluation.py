@@ -1,0 +1,194 @@
+"""Evaluate binary baseline classifiers and risk rankings.
+
+This module centralizes metric calculation for Month 1 baselines. It accepts
+already produced labels, binary predictions, and risk scores; it does not fit
+models, choose features, tune thresholds, or inspect preprocessing internals.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from math import ceil
+from typing import Final
+
+import numpy as np
+import pandas as pd
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+
+
+TOP_K_FRACTIONS: Final = (0.05, 0.10, 0.20)
+
+
+class EvaluationError(ValueError):
+    """Raised when metric inputs are malformed or unsafe to score."""
+
+
+@dataclass(frozen=True)
+class TopKMetrics:
+    """Precision and recall for a deterministic highest-risk slice."""
+
+    fraction: float
+    selected_count: int
+    precision: float
+    recall: float
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-safe representation."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ClassificationMetrics:
+    """Shared Month 1 binary classification and ranking metrics."""
+
+    row_count: int
+    positive_count: int
+    negative_count: int
+    precision: float
+    recall: float
+    f1: float
+    roc_auc: float
+    pr_auc: float
+    brier_score: float
+    true_negative: int
+    false_positive: int
+    false_negative: int
+    true_positive: int
+    precision_at_5_percent: float
+    recall_at_5_percent: float
+    precision_at_10_percent: float
+    recall_at_10_percent: float
+    precision_at_20_percent: float
+    recall_at_20_percent: float
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a flat JSON-safe metric mapping."""
+        return asdict(self)
+
+
+def _as_1d_array(values: object, *, name: str) -> np.ndarray:
+    """Return a one-dimensional numpy array or fail clearly."""
+    array = np.asarray(values)
+    if array.ndim != 1:
+        raise EvaluationError(f"{name} must be one-dimensional.")
+    if array.size == 0:
+        raise EvaluationError(f"{name} must not be empty.")
+    return array
+
+
+def _validate_binary(values: np.ndarray, *, name: str) -> np.ndarray:
+    """Validate binary class labels/predictions and return integer values."""
+    if np.any(pd.isna(values)):
+        raise EvaluationError(f"{name} must not contain null values.")
+    observed = set(values.tolist())
+    if not observed.issubset({0, 1, False, True}):
+        raise EvaluationError(f"{name} must contain only 0/1 values.")
+    return values.astype(int)
+
+def _validate_scores(values: np.ndarray) -> np.ndarray:
+    """Validate finite probability/risk scores in the closed unit interval."""
+    scores = values.astype(float)
+    if not np.isfinite(scores).all():
+        raise EvaluationError("y_score must contain only finite values.")
+    if ((scores < 0.0) | (scores > 1.0)).any():
+        raise EvaluationError("y_score values must be in [0, 1].")
+    return scores
+
+
+def _validate_inputs(
+    y_true: object, y_pred: object, y_score: object
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Validate and align evaluation arrays."""
+    true = _validate_binary(_as_1d_array(y_true, name="y_true"), name="y_true")
+    pred = _validate_binary(_as_1d_array(y_pred, name="y_pred"), name="y_pred")
+    score = _validate_scores(_as_1d_array(y_score, name="y_score"))
+    if not (len(true) == len(pred) == len(score)):
+        raise EvaluationError("y_true, y_pred, and y_score lengths must match.")
+    return true, pred, score
+
+
+def top_k_metrics(
+    y_true: object, y_score: object, *, fraction: float
+) -> TopKMetrics:
+    """Compute metrics for the highest-risk fraction of rows.
+
+    The selected row count is `max(1, ceil(n * fraction))`. Ties are resolved by
+    original row order after sorting by score descending, using stable mergesort.
+    """
+    true = _validate_binary(_as_1d_array(y_true, name="y_true"), name="y_true")
+    score = _validate_scores(_as_1d_array(y_score, name="y_score"))
+    if len(true) != len(score):
+        raise EvaluationError("y_true and y_score lengths must match.")
+    if not 0.0 < fraction <= 1.0:
+        raise EvaluationError("fraction must be in the interval (0, 1].")
+    selected_count = max(1, int(ceil(len(true) * fraction)))
+    order = np.argsort(-score, kind="mergesort")
+    selected = order[:selected_count]
+    selected_true = true[selected]
+    selected_positive = int(selected_true.sum())
+    total_positive = int(true.sum())
+    precision = float(selected_positive / selected_count)
+    recall = float(selected_positive / total_positive) if total_positive else 0.0
+    return TopKMetrics(
+        fraction=float(fraction),
+        selected_count=selected_count,
+        precision=precision,
+        recall=recall,
+    )
+
+
+def evaluate_binary_classifier(
+    y_true: object,
+    y_pred: object,
+    y_score: object,
+) -> ClassificationMetrics:
+    """Calculate all Month 1 metrics for one binary classifier."""
+    true, pred, score = _validate_inputs(y_true, y_pred, y_score)
+    positive_count = int(true.sum())
+    negative_count = int(len(true) - positive_count)
+    if positive_count == 0 or negative_count == 0:
+        roc_auc = float("nan")
+        pr_auc = float("nan")
+    else:
+        roc_auc = float(roc_auc_score(true, score))
+        pr_auc = float(average_precision_score(true, score))
+    tn, fp, fn, tp = (int(value) for value in confusion_matrix(true, pred, labels=[0, 1]).ravel())
+    top_k = {
+        fraction: top_k_metrics(true, score, fraction=fraction)
+        for fraction in TOP_K_FRACTIONS
+    }
+    return ClassificationMetrics(
+        row_count=len(true),
+        positive_count=positive_count,
+        negative_count=negative_count,
+        precision=float(precision_score(true, pred, zero_division=0)),
+        recall=float(recall_score(true, pred, zero_division=0)),
+        f1=float(f1_score(true, pred, zero_division=0)),
+        roc_auc=roc_auc,
+        pr_auc=pr_auc,
+        brier_score=float(brier_score_loss(true, score)),
+        true_negative=tn,
+        false_positive=fp,
+        false_negative=fn,
+        true_positive=tp,
+        precision_at_5_percent=top_k[0.05].precision,
+        recall_at_5_percent=top_k[0.05].recall,
+        precision_at_10_percent=top_k[0.10].precision,
+        recall_at_10_percent=top_k[0.10].recall,
+        precision_at_20_percent=top_k[0.20].precision,
+        recall_at_20_percent=top_k[0.20].recall,
+    )
+
+
+def metrics_row(model_name: str, metrics: ClassificationMetrics) -> dict[str, object]:
+    """Return the standard report row for one evaluated model."""
+    row = metrics.to_dict()
+    return {"model": model_name, **row}

@@ -1,0 +1,12 @@
+{
+  "feature_names": [
+    "created_hour",
+    "created_day_of_week",
+    "created_month",
+    "is_weekend"
+  ],
+  "phase_9_contract_fingerprint": "d6620d99301f80884487140bde487479f58fe72c1e209328524fa27e8b5a2271",
+  "selected_model_name": "Logistic Regression",
+  "selected_threshold": 0.5,
+  "selection_rule": "Prefer models with non-constant validation risk scores; then maximize validation Recall@10%; break ties by PR-AUC, then lower Brier score, then simpler model order."
+}
