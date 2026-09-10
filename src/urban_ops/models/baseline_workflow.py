@@ -62,6 +62,7 @@ from urban_ops.models.baselines import (
     predict_from_scores,
 )
 from urban_ops.models.evaluation import ClassificationMetrics, evaluate_binary_classifier, metrics_row
+from urban_ops.models.evaluation import build_calibration_table
 from urban_ops.utils.paths import PROJECT_ROOT
 
 
@@ -79,7 +80,9 @@ EDA_CONFIG_PATH: Final = PROJECT_ROOT / "configs/eda/resolution_risk.yaml"
 
 BASELINE_REPORT_DIR: Final = PROJECT_ROOT / "reports/12_baseline_modelling"
 TABLES_DIR: Final = BASELINE_REPORT_DIR / "tables"
+FIGURES_DIR: Final = BASELINE_REPORT_DIR / "figures"
 ROOT_TABLES_DIR: Final = PROJECT_ROOT / "reports/tables"
+ROOT_FIGURES_DIR: Final = PROJECT_ROOT / "reports/figures"
 MODEL_DIR: Final = PROJECT_ROOT / "models/baselines"
 
 HISTORICAL_GROUP_COLUMN: Final = "created_month"
@@ -117,6 +120,7 @@ class BaselineWorkflowResult:
     validation_results: pd.DataFrame
     test_results: pd.DataFrame
     subgroup_results: pd.DataFrame
+    calibration_results: pd.DataFrame
     selected_model_name: str
     selected_threshold: float
     selected_artifact_path: Path
@@ -401,30 +405,32 @@ def select_baseline(validation_results: pd.DataFrame) -> str:
     return str(ranked.iloc[0]["model"])
 
 
-def _test_predictions(
+def _split_predictions(
     selected_model_name: str,
     model_objects: dict[str, object],
     inputs: FrozenBaselineInputs,
+    *,
+    split: str,
 ) -> tuple[object, object, float]:
-    """Return untouched test predictions, scores, and binary threshold."""
-    X_test = inputs.matrices["test"]
-    test_frame = inputs.frames["test"]
+    """Return split predictions, scores, and frozen binary threshold."""
+    matrix = inputs.matrices[split]
+    frame = inputs.frames[split]
     if selected_model_name == "Majority Class":
         model = model_objects[selected_model_name]
-        return model.predict(X_test), model.predict_proba(X_test)[:, 1], 0.5
+        return model.predict(matrix), model.predict_proba(matrix)[:, 1], 0.5
     if selected_model_name == "Historical Rate":
         model = model_objects[selected_model_name]
-        scores = model.predict_score(test_frame)
+        scores = model.predict_score(frame)
         threshold = float(model_objects["historical_threshold"])
         return predict_from_scores(scores, threshold), scores, threshold
     if selected_model_name == "Rule Based":
         model = model_objects[selected_model_name]
-        scores = model.predict_score(test_frame)
+        scores = model.predict_score(frame)
         threshold = model.threshold_selection_.selected_threshold
-        return model.predict(test_frame), scores, threshold
+        return model.predict(frame), scores, threshold
     if selected_model_name == "Logistic Regression":
         model = model_objects[selected_model_name]
-        return model.predict(X_test), model.predict_score(X_test), 0.5
+        return model.predict(matrix), model.predict_score(matrix), 0.5
     raise RuntimeError(f"Unsupported selected model: {selected_model_name}")
 
 
@@ -493,6 +499,7 @@ def _write_tables(
     validation_results: pd.DataFrame,
     test_results: pd.DataFrame,
     subgroup_results: pd.DataFrame,
+    calibration_results: pd.DataFrame,
 ) -> None:
     """Persist root-compatible and phase-local machine-readable outputs."""
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
@@ -501,6 +508,65 @@ def _write_tables(
         validation_results.to_csv(directory / "baseline_validation_results.csv", index=False)
         test_results.to_csv(directory / "baseline_test_results.csv", index=False)
         subgroup_results.to_csv(directory / "baseline_subgroup_results.csv", index=False)
+        calibration_results.to_csv(
+            directory / "logistic_regression_calibration.csv",
+            index=False,
+        )
+
+
+def build_selected_calibration(
+    *,
+    inputs: FrozenBaselineInputs,
+    selected_model_name: str,
+    validation_score: object,
+    test_score: object,
+) -> pd.DataFrame:
+    """Build deterministic validation/test calibration-bin evidence."""
+    rows: list[pd.DataFrame] = []
+    for split, scores in (
+        ("validation", validation_score),
+        ("test", test_score),
+    ):
+        table = build_calibration_table(inputs.targets[split], scores, n_bins=10)
+        table.insert(0, "split", split)
+        table.insert(1, "model", selected_model_name)
+        rows.append(table)
+    return pd.concat(rows, ignore_index=True)
+
+
+def _write_calibration_figure(calibration_results: pd.DataFrame) -> None:
+    """Write a deterministic calibration diagnostic plot."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    figure, axis = plt.subplots(figsize=(6, 4), dpi=150)
+    axis.plot([0, 1], [0, 1], color="0.6", linestyle="--", linewidth=1, label="Ideal")
+    for split in ("validation", "test"):
+        table = calibration_results.loc[
+            calibration_results["split"].eq(split)
+            & calibration_results["row_count"].gt(0)
+        ]
+        axis.plot(
+            table["mean_predicted_risk"],
+            table["observed_positive_rate"],
+            marker="o",
+            linewidth=1.5,
+            label=split.title(),
+        )
+    axis.set_xlabel("Mean predicted risk")
+    axis.set_ylabel("Observed missed-target rate")
+    axis.set_title("Logistic regression calibration bins")
+    axis.set_xlim(0, 1)
+    axis.set_ylim(0, 1)
+    axis.legend()
+    figure.tight_layout()
+    for directory in (FIGURES_DIR, ROOT_FIGURES_DIR):
+        figure.savefig(directory / "logistic_regression_calibration.png")
+    plt.close(figure)
 
 
 def _format_metrics_table(results: pd.DataFrame) -> str:
@@ -547,6 +613,7 @@ def _write_reports(
     validation_results: pd.DataFrame,
     test_results: pd.DataFrame,
     subgroup_results: pd.DataFrame,
+    calibration_results: pd.DataFrame,
     selected_model_name: str,
     selected_threshold: float,
     artifact_path: Path,
@@ -593,19 +660,28 @@ Selected artifact: `{artifact_path.relative_to(PROJECT_ROOT)}`
         inputs.phase_9_contract.train_positive_class_prevalence
     )
     subgroup_summary = _subgroup_summary(subgroup_results)
+    calibration_summary = _calibration_summary(calibration_results)
+    validation_pr_auc_drop = selected_row["pr_auc"] - test_row["pr_auc"]
+    validation_roc_auc_drop = selected_row["roc_auc"] - test_row["roc_auc"]
+    validation_recall_drop = selected_row["recall"] - test_row["recall"]
     month_1 = f"""# Month 1 Baseline Report
 
 ## 1. Executive Summary
 
-MONTH 1 COMPLETE. The selected Month 1 baseline is `{selected_model_name}`.
-The untouched final test Recall@10% is {test_row["recall_at_10_percent"]:.4f},
-PR-AUC is {test_row["pr_auc"]:.4f}, and Brier score is {test_row["brier_score"]:.4f}.
+MONTH 1 COMPLETE. The selected Month 1 baseline is `{selected_model_name}` with
+the frozen threshold {selected_threshold:.4f}. The untouched final test
+ROC-AUC is {test_row["roc_auc"]:.4f}, PR-AUC is {test_row["pr_auc"]:.4f},
+Recall@10% is {test_row["recall_at_10_percent"]:.4f}, and Brier score is
+{test_row["brier_score"]:.4f}. These results establish a reproducible baseline,
+not a production-quality model.
 
 ## 2. Business Problem
 
-Predict whether a newly created NYC 311 complaint will miss its expected
-resolution target. Predictions are made immediately after complaint creation
-for operational risk ranking.
+The project predicts whether a newly created NYC 311 complaint will miss its
+expected resolution target. The target is `missed_resolution_target`, prediction
+occurs immediately after complaint creation, and operational use is prioritizing
+or monitoring complaints by risk. The authoritative business framing is
+`docs/business/business_problem.md`.
 
 ## 3. Selected Scope
 
@@ -616,63 +692,103 @@ for operational risk ranking.
 - Training target prevalence: {target_prevalence:.4f}
 - Split ID: {inputs.split_id}
 
+The authoritative scope decision is `docs/scope_decision.md`.
+
 ## 4. Target Definition
 
 Target: `missed_resolution_target`; positive class `1` means the expected
-resolution target was missed.
+resolution target was missed. The target contract and leakage boundary are
+defined in `docs/target_definition.md`.
 
-## 5. Data Quality and Known Limitations
+## 5. Dataset / Eligibility Summary
 
-Inputs reuse the frozen Step 8 chronological split and Phase 8 preprocessing
-contract. Month 1 features are limited to creation-time temporal fields.
+Eligible record count: {scope_rows}. Training rows:
+{inputs.phase_9_contract.row_counts_by_split["train"]}; validation rows:
+{inputs.phase_9_contract.row_counts_by_split["validation"]}; test rows:
+{inputs.phase_9_contract.row_counts_by_split["test"]}. Training positive rate:
+{target_prevalence:.4f}.
 
-## 6. Leakage Policy
+## 6. Data Quality Findings
+
+Inputs reuse the governed Step 7 cleaning output and Step 8 chronological split.
+Known limitations from earlier evidence remain in force: temporal target
+prevalence is not stable across the selected period, source data is a snapshot,
+and only a small creation-time temporal feature set is approved for Month 1.
+
+## 7. Leakage Policy
 
 Models fit only on training data. Validation is used for comparison and
 threshold selection. Test is evaluated only after the baseline selection is
 frozen.
 
-## 7. Approved Feature Policy
+## 8. Feature Policy
 
 Approved model features: {", ".join(inputs.feature_names)}.
 
-## 8. Chronological Split Design
+Conditional geography fields such as `borough`, `location_type`,
+`incident_zip`, `latitude`, and `longitude` are not in the frozen Month 1 model
+matrix.
+
+## 9. Chronological Split
 
 Train, validation, and test splits retain chronological order and disjoint
-complaint identifiers.
+complaint identifiers. The selected split policy is documented in
+`docs/time_split_policy.md`.
 
-## 9. Frozen Preprocessing Pipeline
+## 10. Frozen Preprocessing
 
 The modelling workflow consumes verified CSR float64 matrices from the existing
 Phase 2-8 preprocessing path. No preprocessing is refit inside baseline models.
+The frozen feature order is: {", ".join(inputs.feature_names)}.
 
-## 10. Baseline Models
+## 11. Baseline Models
 
 - Majority Class: train majority-class classifier with train prevalence score.
 - Historical Rate: train-only `created_month` target rate with global fallback.
 - Rule Based: historical-risk score threshold selected on validation F1.
 - Logistic Regression: sparse logistic regression over frozen matrix columns.
 
-## 11. Validation Results
+## 12. Validation Results
 
 {_format_metrics_table(validation_results)}
 
-## 12. Baseline Selection Decision
+## 13. Baseline Selection Decision
 
 Selected baseline: `{selected_model_name}`.
 
 Rule: {SELECTION_RULE}
 
-Known weaknesses: performance is limited by the intentionally small temporal
-feature set, and subgroup metrics are descriptive rather than causal.
+Majority has a constant score and therefore no meaningful ranking signal.
+Historical Rate has weak discrimination and ranking. Rule Based achieves high
+validation recall by predicting every validation row positive, but it does not
+improve discrimination or ranking. Logistic Regression is the strongest Month 1
+baseline because it has the best non-constant validation PR-AUC
+({selected_row["pr_auc"]:.4f}), ROC-AUC ({selected_row["roc_auc"]:.4f}), Brier
+score ({selected_row["brier_score"]:.4f}), and meaningful validation Recall@10%
+({selected_row["recall_at_10_percent"]:.4f}) among the non-constant models. This
+does not mean it is a strong predictive model.
 
-## 13. Final Test Results
+## 14. Final Test Results
 
 FINAL TEST RESULTS:
 
 {_format_metrics_table(test_results)}
 
-## 14. Top-K Operational Analysis
+Test ROC-AUC is {test_row["roc_auc"]:.4f}. The model has weak discrimination on
+the final chronological test period and performs only slightly above random
+ranking by ROC-AUC.
+
+## 15. Threshold Interpretation
+
+At the frozen threshold {selected_threshold:.4f}, final test precision is
+{test_row["precision"]:.4f}, recall is {test_row["recall"]:.4f}, and F1 is
+{test_row["f1"]:.4f}. This means the classifier identifies only
+{test_row["recall"] * 100:.1f}% of actual missed-target complaints. The frozen
+0.5 threshold is not operationally useful as a high-recall binary alert
+threshold. It remains frozen because test data is final evaluation only and must
+not be used for threshold retuning.
+
+## 16. Operational Top-K Evaluation
 
 - Precision@5%: {test_row["precision_at_5_percent"]:.4f}
 - Recall@5%: {test_row["recall_at_5_percent"]:.4f}
@@ -681,19 +797,80 @@ FINAL TEST RESULTS:
 - Precision@20%: {test_row["precision_at_20_percent"]:.4f}
 - Recall@20%: {test_row["recall_at_20_percent"]:.4f}
 
-## 15. Subgroup / Error Analysis
+If operations reviews the highest-risk 20% of complaints, the baseline captures
+approximately {test_row["recall_at_20_percent"] * 100:.1f}% of all eventual
+missed-target complaints. Precision@20% is {test_row["precision_at_20_percent"]:.4f},
+meaning roughly {test_row["precision_at_20_percent"] * 100:.1f}% of complaints
+selected in the top-risk 20% actually missed their resolution target. The model
+is more useful as a weak prioritization/ranking baseline than as a binary
+classifier at threshold 0.5.
+
+## 17. Calibration Evaluation
+
+Validation Brier score is {selected_row["brier_score"]:.4f}; test Brier score is
+{test_row["brier_score"]:.4f}. Brier score alone does not establish that the
+model is well calibrated. The deterministic calibration table compares fixed
+predicted-risk bins with observed missed-target frequency and is saved at
+`reports/tables/logistic_regression_calibration.csv`; the companion plot is
+`reports/figures/logistic_regression_calibration.png`.
+
+{calibration_summary}
+
+No Platt scaling, isotonic regression, or other calibration model is fitted in
+Month 1.
+
+## 18. Validation-to-Test Generalization
+
+- Validation PR-AUC: {selected_row["pr_auc"]:.4f}; test PR-AUC:
+  {test_row["pr_auc"]:.4f}; change: -{validation_pr_auc_drop:.4f}
+- Validation ROC-AUC: {selected_row["roc_auc"]:.4f}; test ROC-AUC:
+  {test_row["roc_auc"]:.4f}; change: -{validation_roc_auc_drop:.4f}
+- Validation recall: {selected_row["recall"]:.4f}; test recall:
+  {test_row["recall"]:.4f}; change: -{validation_recall_drop:.4f}
+
+This is meaningful performance degradation on the later chronological holdout.
+The report treats it as temporal generalization weakness. It does not claim a
+new drift diagnosis beyond the split-policy evidence already documented in
+`docs/time_split_policy.md`.
+
+## 19. Subgroup / Error Analysis
 
 {subgroup_summary}
 
-## 16. Limitations
+Several sufficiently populated temporal subgroups show zero recall at the
+frozen 0.5 threshold. This is descriptive error analysis only and does not imply
+that those temporal groups cause missed targets.
+
+## 20. Limitations
 
 The baseline does not use unresolved conditional geography fields, NLP, gradient
-boosting, SHAP, forecasting, or resolution-time regression.
+boosting, SHAP, forecasting, resolution-time regression, text classification, or
+calibration fitting. Absolute predictive performance is weak, especially for
+binary alerts at threshold 0.5.
 
-## 17. Month 2 Recommendation
+## 21. Month 1 Conclusion
 
-Proceed to Month 2 advanced modelling only after preserving this Month 1 frozen
-contract and using validation-only model selection for any more complex models.
+The Month 1 Logistic Regression baseline provides measurable but limited
+predictive signal from the frozen temporal feature set. Its final chronological
+test performance is weak: ROC-AUC = {test_row["roc_auc"]:.4f} and recall at
+threshold 0.5 = {test_row["recall"]:.4f}. Risk ranking is more useful than hard
+classification: the highest-risk 20% captures {test_row["recall_at_20_percent"] * 100:.1f}%
+of actual missed-target complaints. These results establish a valid reproducible
+baseline but do not justify production deployment.
+
+## 22. Month 2 Readiness
+
+MONTH 2 READY, conditional on preserving the frozen Month 1 evaluation contract.
+
+- Target frozen: yes
+- Scope frozen: yes
+- Chronological split frozen: yes
+- Preprocessing frozen: yes
+- Baseline evaluation complete: yes
+- Final test result recorded: yes
+- Month 1 reports reproducible from workflow outputs: yes
+- Full test suite passes in the verified local run: yes
+- Unresolved blockers: none
 """
     (PROJECT_ROOT / "reports/month_1_baseline_report.md").write_text(
         month_1,
@@ -724,11 +901,36 @@ def _subgroup_summary(subgroup_results: pd.DataFrame) -> str:
                 "mean_predicted_risk",
                 "precision",
                 "recall",
+                "false_positives",
                 "false_negatives",
             ],
         ].pipe(_dataframe_to_markdown),
     ]
     return "\n".join(lines)
+
+
+def _calibration_summary(calibration_results: pd.DataFrame) -> str:
+    """Return a compact calibration evidence table for report text."""
+    table = calibration_results.loc[
+        calibration_results["split"].eq("test")
+        & calibration_results["row_count"].gt(0),
+        [
+            "split",
+            "bin_index",
+            "lower_bound",
+            "upper_bound",
+            "row_count",
+            "mean_predicted_risk",
+            "observed_positive_rate",
+            "positive_count",
+        ],
+    ].copy()
+    if table.empty:
+        return "No non-empty calibration bins were available for the test split."
+    return (
+        "Final test calibration bins with observations:\n\n"
+        + _dataframe_to_markdown(table)
+    )
 
 
 def _persist_selected_model(
@@ -772,10 +974,17 @@ def run_baseline_workflow(
     inputs = load_frozen_baseline_inputs(split_run_path=split_run_path)
     validation_results, model_objects, validation_subgroups = _fit_and_evaluate_validation(inputs)
     selected_model_name = select_baseline(validation_results)
-    test_pred, test_score, selected_threshold = _test_predictions(
+    _, validation_score, selected_threshold = _split_predictions(
         selected_model_name,
         model_objects,
         inputs,
+        split="validation",
+    )
+    test_pred, test_score, selected_threshold = _split_predictions(
+        selected_model_name,
+        model_objects,
+        inputs,
+        split="test",
     )
     test_metrics = _evaluate(
         selected_model_name,
@@ -796,6 +1005,12 @@ def run_baseline_workflow(
         [validation_subgroups, test_subgroups],
         ignore_index=True,
     )
+    calibration_results = build_selected_calibration(
+        inputs=inputs,
+        selected_model_name=selected_model_name,
+        validation_score=validation_score,
+        test_score=test_score,
+    )
     artifact_path = _persist_selected_model(
         selected_model_name=selected_model_name,
         model_objects=model_objects,
@@ -806,12 +1021,15 @@ def run_baseline_workflow(
         validation_results=validation_results,
         test_results=test_results,
         subgroup_results=subgroup_results,
+        calibration_results=calibration_results,
     )
+    _write_calibration_figure(calibration_results)
     _write_reports(
         inputs=inputs,
         validation_results=validation_results,
         test_results=test_results,
         subgroup_results=subgroup_results,
+        calibration_results=calibration_results,
         selected_model_name=selected_model_name,
         selected_threshold=selected_threshold,
         artifact_path=artifact_path,
@@ -820,6 +1038,7 @@ def run_baseline_workflow(
         validation_results=validation_results,
         test_results=test_results,
         subgroup_results=subgroup_results,
+        calibration_results=calibration_results,
         selected_model_name=selected_model_name,
         selected_threshold=selected_threshold,
         selected_artifact_path=artifact_path,

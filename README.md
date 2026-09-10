@@ -2,6 +2,45 @@
 
 Production-grade machine learning and data engineering platform for NYC 311 service-request forecasting, resolution-risk prediction, categorization, anomaly detection, and operational monitoring.
 
+## Project status
+
+### Month 1 — Data and Baseline System: COMPLETE
+
+Month 1 has completed the governed DSNY Graffiti resolution-risk baseline:
+
+- business problem, target, and scope are defined;
+- chronological train/validation/test split is frozen;
+- preprocessing is frozen as CSR float64 matrices with feature order
+  `created_hour`, `created_day_of_week`, `created_month`, `is_weekend`;
+- four Month 1 baselines are implemented and evaluated;
+- Logistic Regression is selected as the strongest Month 1 baseline with
+  frozen threshold `0.5`;
+- final untouched test evaluation is complete;
+- the Month 1 report is generated at `reports/month_1_baseline_report.md`.
+
+The Month 1 baseline is not a production-quality model. It is a reproducible
+baseline evidence package for comparison in later modelling work.
+
+### Month 2 Readiness
+
+MONTH 2 READY, provided the frozen Month 1 evaluation contract is preserved:
+
+- target frozen;
+- scope frozen;
+- chronological split frozen;
+- preprocessing frozen;
+- baseline evaluation complete;
+- final test result recorded;
+- Month 1 reports reproducible from workflow outputs;
+- test suite verified in the Month 1 closeout run;
+- no unresolved Month 1 blocker.
+
+Use the completion gate before beginning Month 2 work:
+
+```bash
+make verify-month1
+```
+
 ## Installation
 
 Create and activate a virtual environment:

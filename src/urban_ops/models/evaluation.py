@@ -74,6 +74,23 @@ class ClassificationMetrics:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class CalibrationBin:
+    """Observed outcome frequency for one fixed predicted-risk interval."""
+
+    bin_index: int
+    lower_bound: float
+    upper_bound: float
+    row_count: int
+    mean_predicted_risk: float
+    observed_positive_rate: float
+    positive_count: int
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-safe representation."""
+        return asdict(self)
+
+
 def _as_1d_array(values: object, *, name: str) -> np.ndarray:
     """Return a one-dimensional numpy array or fail clearly."""
     array = np.asarray(values)
@@ -92,6 +109,7 @@ def _validate_binary(values: np.ndarray, *, name: str) -> np.ndarray:
     if not observed.issubset({0, 1, False, True}):
         raise EvaluationError(f"{name} must contain only 0/1 values.")
     return values.astype(int)
+
 
 def _validate_scores(values: np.ndarray) -> np.ndarray:
     """Validate finite probability/risk scores in the closed unit interval."""
@@ -192,3 +210,47 @@ def metrics_row(model_name: str, metrics: ClassificationMetrics) -> dict[str, ob
     """Return the standard report row for one evaluated model."""
     row = metrics.to_dict()
     return {"model": model_name, **row}
+
+
+def build_calibration_table(
+    y_true: object,
+    y_score: object,
+    *,
+    n_bins: int = 10,
+) -> pd.DataFrame:
+    """Bin predicted risks and compare them with observed positive rates.
+
+    Bins are deterministic, equal-width intervals over `[0, 1]`. The first bin
+    includes zero and all bins include their right edge, so a score of `1.0`
+    belongs to the final bin. Empty bins are retained with zero row count and
+    NaN rate fields to keep a stable report shape.
+    """
+    true = _validate_binary(_as_1d_array(y_true, name="y_true"), name="y_true")
+    score = _validate_scores(_as_1d_array(y_score, name="y_score"))
+    if len(true) != len(score):
+        raise EvaluationError("y_true and y_score lengths must match.")
+    if isinstance(n_bins, bool) or not isinstance(n_bins, int) or n_bins < 2:
+        raise EvaluationError("n_bins must be an integer greater than one.")
+    edges = np.linspace(0.0, 1.0, int(n_bins) + 1)
+    bin_indexes = np.digitize(score, edges[1:-1], right=True)
+    rows: list[CalibrationBin] = []
+    for bin_index in range(int(n_bins)):
+        mask = bin_indexes == bin_index
+        row_count = int(mask.sum())
+        positives = int(true[mask].sum()) if row_count else 0
+        rows.append(
+            CalibrationBin(
+                bin_index=bin_index,
+                lower_bound=float(edges[bin_index]),
+                upper_bound=float(edges[bin_index + 1]),
+                row_count=row_count,
+                mean_predicted_risk=(
+                    float(score[mask].mean()) if row_count else float("nan")
+                ),
+                observed_positive_rate=(
+                    float(true[mask].mean()) if row_count else float("nan")
+                ),
+                positive_count=positives,
+            )
+        )
+    return pd.DataFrame([row.to_dict() for row in rows])

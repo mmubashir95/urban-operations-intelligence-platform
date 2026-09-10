@@ -5,7 +5,7 @@ CLEANING_CONFIG ?= configs/data/cleaning_rules.yaml
 SPLIT_CONFIG ?= configs/data/splits.yaml
 EDA_CONFIG ?= configs/eda/resolution_risk.yaml
 
-.PHONY: ingest-resolution-risk ingest-resolution-risk-dry-run validate-resolution-risk validate-resolution-risk-strict clean-resolution-risk clean-resolution-risk-dry-run split-resolution-risk split-resolution-risk-dry-run eda-resolution-risk eda-resolution-risk-dry-run baseline-resolution-risk
+.PHONY: ingest-resolution-risk ingest-resolution-risk-dry-run validate-resolution-risk validate-resolution-risk-strict clean-resolution-risk clean-resolution-risk-dry-run split-resolution-risk split-resolution-risk-dry-run eda-resolution-risk eda-resolution-risk-dry-run baseline-resolution-risk verify-month1
 
 ingest-resolution-risk:
 	PYTHONPATH=src $(PYTHON) -m urban_ops.data.ingest --config $(INGESTION_CONFIG)
@@ -38,4 +38,9 @@ eda-resolution-risk-dry-run:
 	PYTHONPATH=src $(PYTHON) -m urban_ops.eda.pipeline --config $(EDA_CONFIG) --dry-run
 
 baseline-resolution-risk:
-	PYTHONPATH=src $(PYTHON) -m urban_ops.models.baseline_workflow
+	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.baseline_workflow
+
+verify-month1:
+	PYTHONPATH=src:. $(PYTHON) -m pytest tests/unit/models/test_baselines.py tests/unit/models/test_evaluation.py tests/unit/models/test_month1_verification.py tests/integration/test_preprocessing_verification_handling.py tests/integration/test_baseline_workflow.py
+	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.baseline_workflow
+	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.month1_verification

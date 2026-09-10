@@ -7,6 +7,7 @@ import pytest
 
 from urban_ops.models.evaluation import (
     EvaluationError,
+    build_calibration_table,
     evaluate_binary_classifier,
     top_k_metrics,
 )
@@ -43,6 +44,23 @@ def test_top_k_uses_ceil_and_stable_tie_order() -> None:
     assert metrics.selected_count == 2
     assert metrics.precision == 0.5
     assert metrics.recall == 0.5
+
+
+def test_build_calibration_table_uses_fixed_bins() -> None:
+    """Calibration bins compare mean score with observed outcome rate."""
+    table = build_calibration_table(
+        [0, 1, 1, 0],
+        [0.05, 0.15, 0.85, 0.95],
+        n_bins=5,
+    )
+
+    assert table.shape[0] == 5
+    assert table.loc[0, "row_count"] == 2
+    assert table.loc[0, "positive_count"] == 1
+    assert table.loc[4, "row_count"] == 2
+    assert table.loc[4, "positive_count"] == 1
+    assert table.loc[1, "row_count"] == 0
+    assert np.isnan(table.loc[1, "observed_positive_rate"])
 
 
 def test_single_class_auc_metrics_are_nan_but_other_metrics_defined() -> None:
