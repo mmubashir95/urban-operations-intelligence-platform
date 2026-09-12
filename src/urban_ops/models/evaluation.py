@@ -3,6 +3,10 @@
 This module centralizes metric calculation for Month 1 baselines. It accepts
 already produced labels, binary predictions, and risk scores; it does not fit
 models, choose features, tune thresholds, or inspect preprocessing internals.
+
+The positive-class contract is fixed: ``1`` means a complaint missed its
+resolution target and ``0`` means it resolved on time. Consequently, a false
+negative is an actual missed-target complaint that the model failed to flag.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from typing import Final
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
+    accuracy_score,
     average_precision_score,
     brier_score_loss,
     confusion_matrix,
@@ -25,6 +30,9 @@ from sklearn.metrics import (
 
 
 TOP_K_FRACTIONS: Final = (0.05, 0.10, 0.20)
+NEGATIVE_LABEL: Final = 0
+POSITIVE_LABEL: Final = 1
+ZERO_DIVISION: Final = 0
 
 
 class EvaluationError(ValueError):
@@ -46,22 +54,40 @@ class TopKMetrics:
 
 
 @dataclass(frozen=True)
-class ClassificationMetrics:
-    """Shared Month 1 binary classification and ranking metrics."""
+class BasicClassificationMetrics:
+    """Phase 1 metrics at an already-established binary decision threshold.
+
+    Count meanings use positive label ``1`` (missed target): true positives are
+    misses correctly flagged, false positives are on-time complaints flagged as
+    misses, false negatives are misses not flagged, and true negatives are
+    on-time complaints correctly classified.
+    """
 
     row_count: int
     positive_count: int
     negative_count: int
+    positive_rate: float
+    true_positive: int
+    false_positive: int
+    false_negative: int
+    true_negative: int
+    accuracy: float
     precision: float
     recall: float
     f1: float
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a flat JSON-safe Phase 1 metric mapping."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ClassificationMetrics(BasicClassificationMetrics):
+    """Backward-compatible Month 1 classification and ranking metrics."""
+
     roc_auc: float
     pr_auc: float
     brier_score: float
-    true_negative: int
-    false_positive: int
-    false_negative: int
-    true_positive: int
     precision_at_5_percent: float
     recall_at_5_percent: float
     precision_at_10_percent: float
@@ -133,6 +159,70 @@ def _validate_inputs(
     return true, pred, score
 
 
+def evaluate_basic_classifier(
+    y_true: object,
+    y_pred: object,
+) -> BasicClassificationMetrics:
+    """Calculate Phase 1 classification metrics from existing predictions.
+
+    The confusion matrix uses ``labels=[0, 1]`` explicitly, whose sklearn
+    layout is ``[[TN, FP], [FN, TP]]``. Precision, recall, and F1 use positive
+    label ``1`` and return ``0.0`` when their denominator is zero. Single-class
+    actual targets are permitted and therefore remain deterministic.
+    """
+    true = _validate_binary(_as_1d_array(y_true, name="y_true"), name="y_true")
+    pred = _validate_binary(_as_1d_array(y_pred, name="y_pred"), name="y_pred")
+    if len(true) != len(pred):
+        raise EvaluationError("y_true and y_pred lengths must match.")
+
+    tn, fp, fn, tp = (
+        int(value)
+        for value in confusion_matrix(
+            true,
+            pred,
+            labels=[NEGATIVE_LABEL, POSITIVE_LABEL],
+        ).ravel()
+    )
+    positive_count = int(true.sum())
+    row_count = len(true)
+    negative_count = int(row_count - positive_count)
+    return BasicClassificationMetrics(
+        row_count=row_count,
+        positive_count=positive_count,
+        negative_count=negative_count,
+        positive_rate=float(positive_count / row_count),
+        true_positive=tp,
+        false_positive=fp,
+        false_negative=fn,
+        true_negative=tn,
+        accuracy=float(accuracy_score(true, pred)),
+        precision=float(
+            precision_score(
+                true,
+                pred,
+                pos_label=POSITIVE_LABEL,
+                zero_division=ZERO_DIVISION,
+            )
+        ),
+        recall=float(
+            recall_score(
+                true,
+                pred,
+                pos_label=POSITIVE_LABEL,
+                zero_division=ZERO_DIVISION,
+            )
+        ),
+        f1=float(
+            f1_score(
+                true,
+                pred,
+                pos_label=POSITIVE_LABEL,
+                zero_division=ZERO_DIVISION,
+            )
+        ),
+    )
+
+
 def top_k_metrics(
     y_true: object, y_score: object, *, fraction: float
 ) -> TopKMetrics:
@@ -168,35 +258,24 @@ def evaluate_binary_classifier(
     y_pred: object,
     y_score: object,
 ) -> ClassificationMetrics:
-    """Calculate all Month 1 metrics for one binary classifier."""
+    """Calculate the legacy Month 1 metric set, reusing Phase 1 metrics."""
     true, pred, score = _validate_inputs(y_true, y_pred, y_score)
-    positive_count = int(true.sum())
-    negative_count = int(len(true) - positive_count)
-    if positive_count == 0 or negative_count == 0:
+    basic = evaluate_basic_classifier(true, pred)
+    if basic.positive_count == 0 or basic.negative_count == 0:
         roc_auc = float("nan")
         pr_auc = float("nan")
     else:
         roc_auc = float(roc_auc_score(true, score))
         pr_auc = float(average_precision_score(true, score))
-    tn, fp, fn, tp = (int(value) for value in confusion_matrix(true, pred, labels=[0, 1]).ravel())
     top_k = {
         fraction: top_k_metrics(true, score, fraction=fraction)
         for fraction in TOP_K_FRACTIONS
     }
     return ClassificationMetrics(
-        row_count=len(true),
-        positive_count=positive_count,
-        negative_count=negative_count,
-        precision=float(precision_score(true, pred, zero_division=0)),
-        recall=float(recall_score(true, pred, zero_division=0)),
-        f1=float(f1_score(true, pred, zero_division=0)),
+        **basic.to_dict(),
         roc_auc=roc_auc,
         pr_auc=pr_auc,
         brier_score=float(brier_score_loss(true, score)),
-        true_negative=tn,
-        false_positive=fp,
-        false_negative=fn,
-        true_positive=tp,
         precision_at_5_percent=top_k[0.05].precision,
         recall_at_5_percent=top_k[0.05].recall,
         precision_at_10_percent=top_k[0.10].precision,
@@ -206,10 +285,18 @@ def evaluate_binary_classifier(
     )
 
 
-def metrics_row(model_name: str, metrics: ClassificationMetrics) -> dict[str, object]:
-    """Return the standard report row for one evaluated model."""
+def metrics_row(
+    model_name: str,
+    metrics: BasicClassificationMetrics,
+    *,
+    evaluated_split: str | None = None,
+) -> dict[str, object]:
+    """Return the standard report row for one evaluated model and split."""
     row = metrics.to_dict()
-    return {"model": model_name, **row}
+    identity: dict[str, object] = {"model": model_name}
+    if evaluated_split is not None:
+        identity["evaluated_split"] = evaluated_split
+    return {**identity, **row}
 
 
 def build_calibration_table(

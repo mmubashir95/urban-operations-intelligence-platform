@@ -344,19 +344,27 @@ def _fit_and_evaluate_validation(
 
     rows = [
         {
-            **metrics_row("Majority Class", majority_metrics),
+            **metrics_row(
+                "Majority Class", majority_metrics, evaluated_split="validation"
+            ),
             "score_unique_count": int(pd.Series(majority_scores).nunique()),
         },
         {
-            **metrics_row("Historical Rate", historical_metrics),
+            **metrics_row(
+                "Historical Rate", historical_metrics, evaluated_split="validation"
+            ),
             "score_unique_count": int(pd.Series(historical_scores).nunique()),
         },
         {
-            **metrics_row("Rule Based", rule_metrics),
+            **metrics_row("Rule Based", rule_metrics, evaluated_split="validation"),
             "score_unique_count": int(pd.Series(rule_scores).nunique()),
         },
         {
-            **metrics_row("Logistic Regression", logistic_metrics),
+            **metrics_row(
+                "Logistic Regression",
+                logistic_metrics,
+                evaluated_split="validation",
+            ),
             "score_unique_count": int(pd.Series(logistic_scores).nunique()),
         },
     ]
@@ -587,6 +595,51 @@ def _format_metrics_table(results: pd.DataFrame) -> str:
     return _dataframe_to_markdown(display)
 
 
+def _format_phase_1_table(results: pd.DataFrame) -> str:
+    """Render the standardized Phase 1 classification comparison."""
+    columns = [
+        "model",
+        "evaluated_split",
+        "row_count",
+        "positive_count",
+        "negative_count",
+        "positive_rate",
+        "true_positive",
+        "false_positive",
+        "false_negative",
+        "true_negative",
+        "accuracy",
+        "precision",
+        "recall",
+        "f1",
+    ]
+    return _dataframe_to_markdown(results.loc[:, columns].copy())
+
+
+def _format_confusion_matrices(results: pd.DataFrame) -> str:
+    """Render readable predicted-by-actual confusion matrices for each model."""
+    sections: list[str] = []
+    for _, row in results.iterrows():
+        sections.extend(
+            [
+                f"### {row['model']}",
+                "",
+                "| Predicted \\ Actual | Miss (1) | On-time (0) |",
+                "| --- | ---: | ---: |",
+                (
+                    f"| Miss (1) | TP = {row['true_positive']} | "
+                    f"FP = {row['false_positive']} |"
+                ),
+                (
+                    f"| On-time (0) | FN = {row['false_negative']} | "
+                    f"TN = {row['true_negative']} |"
+                ),
+                "",
+            ]
+        )
+    return "\n".join(sections).rstrip()
+
+
 def _dataframe_to_markdown(frame: pd.DataFrame) -> str:
     """Render a small DataFrame as GitHub-flavored Markdown without tabulate."""
     headers = [str(column) for column in frame.columns]
@@ -629,6 +682,21 @@ def _write_reports(
 ## Validation Comparison
 
 {_format_metrics_table(validation_results)}
+
+## Phase 1 — Basic Classification Evaluation
+
+Positive class `1` means missed resolution target; class `0` means on time.
+Metrics use the baselines' existing predictions and fixed decision mechanisms.
+Precision, recall, and F1 use an explicit zero-division value of `0.0`.
+
+{_format_phase_1_table(validation_results)}
+
+### Human-Readable Confusion Matrices
+
+Rows are predicted outcomes and columns are actual outcomes. A false negative
+is an actual missed-target complaint that the model failed to flag.
+
+{_format_confusion_matrices(validation_results)}
 
 ## Baseline Selection
 
@@ -992,7 +1060,9 @@ def run_baseline_workflow(
         test_pred,
         test_score,
     )
-    test_results = pd.DataFrame([metrics_row(selected_model_name, test_metrics)])
+    test_results = pd.DataFrame(
+        [metrics_row(selected_model_name, test_metrics, evaluated_split="test")]
+    )
     test_subgroups = build_subgroup_analysis(
         frame=inputs.frames["test"],
         y_true=inputs.targets["test"],
