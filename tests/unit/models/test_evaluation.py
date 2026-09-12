@@ -6,13 +6,17 @@ import numpy as np
 import pytest
 
 from urban_ops.models.evaluation import (
+    CALIBRATION_N_BINS,
+    CALIBRATION_STRATEGY,
     PR_AUC_DEFINITION,
     BasicClassificationMetrics,
+    CalibrationEvaluation,
     EvaluationError,
     RankingEvaluation,
     build_calibration_table,
     evaluate_basic_classifier,
     evaluate_binary_classifier,
+    evaluate_calibration,
     evaluate_ranking,
     metrics_row,
     top_k_metrics,
@@ -267,6 +271,137 @@ def test_ranking_evaluation_rejects_invalid_or_undefined_inputs(
     """Malformed scores and undefined single-class ranking fail explicitly."""
     with pytest.raises(EvaluationError, match=message):
         evaluate_ranking(y_true, y_score)
+
+
+def test_calibration_brier_matches_hand_calculated_example() -> None:
+    """Brier score matches the mean of three explicit squared errors."""
+    result = evaluate_calibration([1, 0, 1], [0.8, 0.3, 0.6])
+
+    expected = (0.04 + 0.09 + 0.16) / 3
+    assert result.metrics.brier_score == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_score", "expected_brier"),
+    [
+        ([1, 0, 1, 0], [1.0, 0.0, 1.0, 0.0], 0.0),
+        ([1, 0], [0.0, 1.0], 1.0),
+        ([1, 0], [0.5, 0.5], 0.25),
+    ],
+)
+def test_calibration_brier_core_probability_cases(
+    y_true,
+    y_score,
+    expected_brier: float,
+) -> None:
+    """Perfect, confidently wrong, and uncertain probabilities are deterministic."""
+    result = evaluate_calibration(y_true, y_score)
+
+    assert result.metrics.brier_score == pytest.approx(expected_brier)
+
+
+def test_calibration_curve_uses_uniform_bins_and_omits_empty_bins() -> None:
+    """Curve axes contain only sklearn-populated uniform-bin points."""
+    result = evaluate_calibration([0, 1], [0.05, 0.95])
+
+    assert result.curve.requested_bin_count == CALIBRATION_N_BINS == 10
+    assert result.curve.strategy == CALIBRATION_STRATEGY == "uniform"
+    assert result.curve.mean_predicted_probability == pytest.approx((0.05, 0.95))
+    assert result.curve.observed_positive_rate == pytest.approx((0.0, 1.0))
+    assert len(result.curve.mean_predicted_probability) == 2
+
+
+def test_well_calibrated_grouped_probabilities_follow_ideal_diagonal() -> None:
+    """Twenty and eighty percent groups yield matching observed frequencies."""
+    y_score = [0.2] * 10 + [0.8] * 10
+    y_true = [1, 1] + [0] * 8 + [1] * 8 + [0, 0]
+
+    result = evaluate_calibration(y_true, y_score)
+
+    assert result.curve.mean_predicted_probability == pytest.approx((0.2, 0.8))
+    assert result.curve.observed_positive_rate == pytest.approx((0.2, 0.8))
+
+
+def test_overconfident_group_lies_below_ideal_diagonal() -> None:
+    """An 0.8 prediction group with 40% events is visibly overconfident."""
+    result = evaluate_calibration([1] * 4 + [0] * 6, [0.8] * 10)
+
+    assert result.curve.mean_predicted_probability == pytest.approx((0.8,))
+    assert result.curve.observed_positive_rate == pytest.approx((0.4,))
+    assert (
+        result.curve.observed_positive_rate[0]
+        < result.curve.mean_predicted_probability[0]
+    )
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_score", "expected_rate", "expected_brier"),
+    [
+        ([0, 0, 0], [0.1, 0.2, 0.3], 0.0, (0.01 + 0.04 + 0.09) / 3),
+        ([1, 1, 1], [0.7, 0.8, 0.9], 1.0, (0.09 + 0.04 + 0.01) / 3),
+    ],
+)
+def test_calibration_accepts_single_class_targets(
+    y_true,
+    y_score,
+    expected_rate: float,
+    expected_brier: float,
+) -> None:
+    """Brier and observed frequencies remain defined for one target class."""
+    result = evaluate_calibration(y_true, y_score)
+
+    assert result.metrics.positive_rate == expected_rate
+    assert result.metrics.brier_score == pytest.approx(expected_brier)
+    assert all(value == expected_rate for value in result.curve.observed_positive_rate)
+
+
+def test_calibration_result_exposes_consistent_probability_contract() -> None:
+    """Phase 3 keeps scalar metrics separate from populated curve coordinates."""
+    result = evaluate_calibration([0, 1, 0, 1], [0.1, 0.9, 0.2, 0.8])
+
+    assert isinstance(result, CalibrationEvaluation)
+    assert result.metrics.row_count == 4
+    assert result.metrics.positive_count == 2
+    assert result.metrics.negative_count == 2
+    assert result.metrics.positive_rate == pytest.approx(0.5)
+    assert len(result.curve.mean_predicted_probability) == len(
+        result.curve.observed_positive_rate
+    )
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_score", "message"),
+    [
+        ([], [], "must not be empty"),
+        ([0, 1], [0.1], "lengths must match"),
+        ([0, 2], [0.1, 0.2], "only 0/1"),
+        ([0, 1], [0.1, float("nan")], "finite"),
+        ([0, 1], [0.1, float("inf")], "finite"),
+        ([0, 1], [0.1, float("-inf")], "finite"),
+        ([0, 1], [-0.1, 0.2], "in \\[0, 1\\]"),
+        ([0, 1], [0.1, 1.1], "in \\[0, 1\\]"),
+    ],
+)
+def test_calibration_rejects_invalid_probability_inputs(
+    y_true,
+    y_score,
+    message: str,
+) -> None:
+    """Invalid labels and probability values fail without clipping."""
+    with pytest.raises(EvaluationError, match=message):
+        evaluate_calibration(y_true, y_score)
+
+
+def test_legacy_evaluator_reuses_phase_3_brier_score() -> None:
+    """The legacy Brier field equals the isolated Phase 3 implementation."""
+    y_true = [1, 0, 1]
+    y_pred = [1, 0, 1]
+    y_score = [0.8, 0.3, 0.6]
+
+    legacy = evaluate_binary_classifier(y_true, y_pred, y_score)
+    calibration = evaluate_calibration(y_true, y_score)
+
+    assert legacy.brier_score == calibration.metrics.brier_score
 
 
 def test_evaluate_binary_classifier_matches_manual_confusion_and_top_k() -> None:

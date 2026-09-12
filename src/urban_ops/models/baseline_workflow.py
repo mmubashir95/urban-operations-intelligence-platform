@@ -64,10 +64,12 @@ from urban_ops.models.baselines import (
 )
 from urban_ops.models.evaluation import (
     PR_AUC_DEFINITION,
+    CalibrationEvaluation,
     ClassificationMetrics,
     RankingEvaluation,
     build_calibration_table,
     evaluate_binary_classifier,
+    evaluate_calibration,
     evaluate_ranking,
     metrics_row,
 )
@@ -129,6 +131,7 @@ class BaselineWorkflowResult:
     test_results: pd.DataFrame
     subgroup_results: pd.DataFrame
     calibration_results: pd.DataFrame
+    validation_calibration_results: pd.DataFrame
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
     selected_model_name: str
@@ -304,6 +307,7 @@ def _fit_and_evaluate_validation(
     dict[str, object],
     pd.DataFrame,
     dict[str, RankingEvaluation],
+    dict[str, CalibrationEvaluation],
 ]:
     """Fit train-only baselines and evaluate all models on validation."""
     X_train = inputs.matrices["train"]
@@ -390,6 +394,12 @@ def _fit_and_evaluate_validation(
         "Rule Based": evaluate_ranking(y_validation, rule_scores),
         "Logistic Regression": evaluate_ranking(y_validation, logistic_scores),
     }
+    calibration_evaluations = {
+        "Majority Class": evaluate_calibration(y_validation, majority_scores),
+        "Historical Rate": evaluate_calibration(y_validation, historical_scores),
+        "Rule Based": evaluate_calibration(y_validation, rule_scores),
+        "Logistic Regression": evaluate_calibration(y_validation, logistic_scores),
+    }
     model_objects: dict[str, object] = {
         "Majority Class": majority,
         "Historical Rate": historical,
@@ -406,7 +416,13 @@ def _fit_and_evaluate_validation(
         split_name="validation",
         model_name="Logistic Regression",
     )
-    return validation_results, model_objects, subgroup, ranking_evaluations
+    return (
+        validation_results,
+        model_objects,
+        subgroup,
+        ranking_evaluations,
+        calibration_evaluations,
+    )
 
 
 def select_baseline(validation_results: pd.DataFrame) -> str:
@@ -578,12 +594,44 @@ def build_ranking_curve_tables(
     return pd.DataFrame(roc_rows), pd.DataFrame(pr_rows)
 
 
+def build_validation_calibration_table(
+    evaluations: Mapping[str, CalibrationEvaluation],
+) -> pd.DataFrame:
+    """Build populated validation calibration points for all baselines."""
+    rows: list[dict[str, object]] = []
+    for model_name, evaluation in evaluations.items():
+        for point_index, (
+            mean_predicted_probability,
+            observed_positive_rate,
+        ) in enumerate(
+            zip(
+                evaluation.curve.mean_predicted_probability,
+                evaluation.curve.observed_positive_rate,
+            )
+        ):
+            rows.append(
+                {
+                    "split": "validation",
+                    "model": model_name,
+                    "point_index": point_index,
+                    "mean_predicted_probability": mean_predicted_probability,
+                    "observed_positive_rate": observed_positive_rate,
+                    "requested_bin_count": evaluation.curve.requested_bin_count,
+                    "strategy": evaluation.curve.strategy,
+                    "positive_rate": evaluation.metrics.positive_rate,
+                    "brier_score": evaluation.metrics.brier_score,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def _write_tables(
     *,
     validation_results: pd.DataFrame,
     test_results: pd.DataFrame,
     subgroup_results: pd.DataFrame,
     calibration_results: pd.DataFrame,
+    validation_calibration_results: pd.DataFrame,
     roc_curve_results: pd.DataFrame,
     pr_curve_results: pd.DataFrame,
 ) -> None:
@@ -596,6 +644,10 @@ def _write_tables(
         subgroup_results.to_csv(directory / "baseline_subgroup_results.csv", index=False)
         calibration_results.to_csv(
             directory / "logistic_regression_calibration.csv",
+            index=False,
+        )
+        validation_calibration_results.to_csv(
+            directory / "baseline_validation_calibration_curve.csv",
             index=False,
         )
         roc_curve_results.to_csv(
@@ -660,6 +712,50 @@ def _write_calibration_figure(calibration_results: pd.DataFrame) -> None:
     figure.tight_layout()
     for directory in (FIGURES_DIR, ROOT_FIGURES_DIR):
         figure.savefig(directory / "logistic_regression_calibration.png")
+    plt.close(figure)
+
+
+def _write_validation_calibration_figure(
+    calibration_results: pd.DataFrame,
+) -> None:
+    """Write all-baseline validation calibration points and ideal reference."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    figure, axis = plt.subplots(figsize=(7, 5), dpi=150)
+    axis.plot(
+        [0.0, 1.0],
+        [0.0, 1.0],
+        color="0.5",
+        linestyle="--",
+        linewidth=1,
+        label="Ideal calibration",
+    )
+    for model_name in calibration_results["model"].drop_duplicates():
+        model_points = calibration_results.loc[
+            calibration_results["model"].eq(model_name)
+        ]
+        brier_score = float(model_points["brier_score"].iloc[0])
+        axis.plot(
+            model_points["mean_predicted_probability"],
+            model_points["observed_positive_rate"],
+            marker="o",
+            linewidth=1.5,
+            label=f"{model_name} (Brier={brier_score:.4f})",
+        )
+    axis.set_xlabel("Mean predicted probability")
+    axis.set_ylabel("Observed missed-target rate")
+    axis.set_title("Validation calibration curves")
+    axis.set_xlim(0, 1)
+    axis.set_ylim(0, 1)
+    axis.legend(fontsize=8)
+    figure.tight_layout()
+    for directory in (FIGURES_DIR, ROOT_FIGURES_DIR):
+        figure.savefig(directory / "baseline_validation_calibration_curve.png")
     plt.close(figure)
 
 
@@ -789,6 +885,17 @@ def _format_phase_2_table(results: pd.DataFrame) -> str:
     return _dataframe_to_markdown(results.loc[:, columns].copy())
 
 
+def _format_phase_3_table(results: pd.DataFrame) -> str:
+    """Render the standardized Phase 3 validation probability summary."""
+    columns = [
+        "model",
+        "evaluated_split",
+        "positive_rate",
+        "brier_score",
+    ]
+    return _dataframe_to_markdown(results.loc[:, columns].copy())
+
+
 def _format_confusion_matrices(results: pd.DataFrame) -> str:
     """Render readable predicted-by-actual confusion matrices for each model."""
     sections: list[str] = []
@@ -891,6 +998,29 @@ Figures:
 
 - `reports/figures/baseline_validation_roc_curve.png`
 - `reports/figures/baseline_validation_pr_curve.png`
+
+## Phase 3 — Probability Calibration
+
+The Brier score is sklearn `brier_score_loss`; lower values indicate less
+overall probability error, with `0.0` representing perfect probabilities. It
+reflects both calibration and probabilistic discrimination/resolution, so it is
+not a pure calibration-only statistic and is not a ranking metric.
+
+Calibration curves use 10 uniform probability bins. Points show populated bins
+only: x is mean predicted missed-target probability and y is observed
+missed-target rate. Points near the ideal `y=x` diagonal are locally calibrated;
+points below it indicate overprediction in that bin, while points above it
+indicate underprediction. A local bin does not characterize the entire model.
+
+{_format_phase_3_table(validation_results)}
+
+Calibration data:
+
+- `reports/tables/baseline_validation_calibration_curve.csv`
+
+Figure:
+
+- `reports/figures/baseline_validation_calibration_curve.png`
 
 ## Baseline Selection
 
@@ -1245,10 +1375,14 @@ def run_baseline_workflow(
         model_objects,
         validation_subgroups,
         ranking_evaluations,
+        calibration_evaluations,
     ) = _fit_and_evaluate_validation(inputs)
     roc_curve_results, pr_curve_results = build_ranking_curve_tables(
         ranking_evaluations,
         split_name="validation",
+    )
+    validation_calibration_results = build_validation_calibration_table(
+        calibration_evaluations
     )
     selected_model_name = select_baseline(validation_results)
     _, validation_score, selected_threshold = _split_predictions(
@@ -1301,10 +1435,12 @@ def run_baseline_workflow(
         test_results=test_results,
         subgroup_results=subgroup_results,
         calibration_results=calibration_results,
+        validation_calibration_results=validation_calibration_results,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,
     )
     _write_calibration_figure(calibration_results)
+    _write_validation_calibration_figure(validation_calibration_results)
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -1325,6 +1461,7 @@ def run_baseline_workflow(
         test_results=test_results,
         subgroup_results=subgroup_results,
         calibration_results=calibration_results,
+        validation_calibration_results=validation_calibration_results,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,
         selected_model_name=selected_model_name,

@@ -8,7 +8,9 @@ from urban_ops.models.baseline_workflow import (
     _fit_and_evaluate_validation,
     _format_confusion_matrices,
     _write_ranking_figures,
+    _write_validation_calibration_figure,
     build_ranking_curve_tables,
+    build_validation_calibration_table,
     load_frozen_baseline_inputs,
 )
 from urban_ops.models.evaluation import evaluate_basic_classifier
@@ -72,11 +74,20 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
         split_run_path=None,
     )
 
-    results, _, _, ranking_evaluations = _fit_and_evaluate_validation(inputs)
+    (
+        results,
+        _,
+        _,
+        ranking_evaluations,
+        calibration_evaluations,
+    ) = _fit_and_evaluate_validation(inputs)
     confusion_tables = _format_confusion_matrices(results)
     roc_table, pr_table = build_ranking_curve_tables(
         ranking_evaluations,
         split_name="validation",
+    )
+    calibration_table = build_validation_calibration_table(
+        calibration_evaluations
     )
 
     assert results["model"].tolist() == [
@@ -105,6 +116,13 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
         row = results.loc[results["model"].eq(model_name)].iloc[0]
         assert row["roc_auc"] == evaluation.metrics.roc_auc
         assert row["pr_auc"] == evaluation.metrics.pr_auc
+    assert set(calibration_table["model"]) == set(results["model"])
+    assert calibration_table["split"].eq("validation").all()
+    assert calibration_table["requested_bin_count"].eq(10).all()
+    assert calibration_table["strategy"].eq("uniform").all()
+    for model_name, evaluation in calibration_evaluations.items():
+        row = results.loc[results["model"].eq(model_name)].iloc[0]
+        assert row["brier_score"] == evaluation.metrics.brier_score
 
 
 def test_ranking_figures_use_validation_curves_and_prevalence_reference(
@@ -117,7 +135,7 @@ def test_ranking_figures_use_validation_curves_and_prevalence_reference(
         eda_config_path=fixture.config,
         split_run_path=None,
     )
-    results, _, _, ranking_evaluations = _fit_and_evaluate_validation(inputs)
+    results, _, _, ranking_evaluations, _ = _fit_and_evaluate_validation(inputs)
     roc_table, pr_table = build_ranking_curve_tables(
         ranking_evaluations,
         split_name="validation",
@@ -142,3 +160,34 @@ def test_ranking_figures_use_validation_curves_and_prevalence_reference(
     for directory in (phase_figures, root_figures):
         assert (directory / "baseline_validation_roc_curve.png").stat().st_size > 0
         assert (directory / "baseline_validation_pr_curve.png").stat().st_size > 0
+
+
+def test_validation_calibration_figure_uses_all_baseline_probability_points(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """All validation baselines render against the ideal calibration diagonal."""
+    fixture = build_eda_fixture(tmp_path, make_eda_frame())
+    inputs = load_frozen_baseline_inputs(
+        eda_config_path=fixture.config,
+        split_run_path=None,
+    )
+    results, _, _, _, evaluations = _fit_and_evaluate_validation(inputs)
+    calibration_table = build_validation_calibration_table(evaluations)
+    phase_figures = tmp_path / "phase_figures"
+    root_figures = tmp_path / "root_figures"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.FIGURES_DIR",
+        phase_figures,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_FIGURES_DIR",
+        root_figures,
+    )
+
+    _write_validation_calibration_figure(calibration_table)
+
+    assert set(calibration_table["model"]) == set(results["model"])
+    for directory in (phase_figures, root_figures):
+        artifact = directory / "baseline_validation_calibration_curve.png"
+        assert artifact.stat().st_size > 0

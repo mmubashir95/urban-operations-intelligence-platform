@@ -17,6 +17,7 @@ from typing import Final
 
 import numpy as np
 import pandas as pd
+from sklearn.calibration import calibration_curve
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -36,6 +37,8 @@ NEGATIVE_LABEL: Final = 0
 POSITIVE_LABEL: Final = 1
 ZERO_DIVISION: Final = 0
 PR_AUC_DEFINITION: Final = "average_precision_score"
+CALIBRATION_N_BINS: Final = 10
+CALIBRATION_STRATEGY: Final = "uniform"
 
 
 class EvaluationError(ValueError):
@@ -125,6 +128,39 @@ class RankingEvaluation:
 
 
 @dataclass(frozen=True)
+class CalibrationMetrics:
+    """Phase 3 probability-quality summary for missed-target risk scores."""
+
+    row_count: int
+    positive_count: int
+    negative_count: int
+    positive_rate: float
+    brier_score: float
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a flat JSON-safe Phase 3 summary mapping."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CalibrationCurve:
+    """Populated uniform-bin calibration coordinates from sklearn."""
+
+    mean_predicted_probability: tuple[float, ...]
+    observed_positive_rate: tuple[float, ...]
+    requested_bin_count: int
+    strategy: str
+
+
+@dataclass(frozen=True)
+class CalibrationEvaluation:
+    """Phase 3 scalar metrics and populated calibration-curve points."""
+
+    metrics: CalibrationMetrics
+    curve: CalibrationCurve
+
+
+@dataclass(frozen=True)
 class ClassificationMetrics(BasicClassificationMetrics):
     """Backward-compatible Month 1 classification and ranking metrics."""
 
@@ -184,6 +220,23 @@ def _validate_scores(values: np.ndarray) -> np.ndarray:
     if ((scores < 0.0) | (scores > 1.0)).any():
         raise EvaluationError("y_score values must be in [0, 1].")
     return scores
+
+
+def _uniform_calibration_curve(
+    true: np.ndarray,
+    score: np.ndarray,
+    *,
+    n_bins: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return sklearn observed rates and means for populated uniform bins."""
+    observed_positive_rate, mean_predicted_probability = calibration_curve(
+        true,
+        score,
+        pos_label=POSITIVE_LABEL,
+        n_bins=n_bins,
+        strategy=CALIBRATION_STRATEGY,
+    )
+    return observed_positive_rate, mean_predicted_probability
 
 
 def _validate_inputs(
@@ -313,6 +366,50 @@ def evaluate_ranking(
     return RankingEvaluation(metrics=metrics, curves=curves)
 
 
+def evaluate_calibration(
+    y_true: object,
+    y_score: object,
+) -> CalibrationEvaluation:
+    """Evaluate existing positive-class probabilities without changing them.
+
+    Scores must be finite probabilities in ``[0, 1]`` where larger values mean
+    greater risk of missed target (class ``1``). The curve uses ten uniform bins
+    and sklearn omits bins with no observations. Single-class targets are
+    accepted because Brier loss and observed-frequency estimates remain defined.
+    No estimator fitting, recalibration, or threshold operation occurs here.
+    """
+    true = _validate_binary(_as_1d_array(y_true, name="y_true"), name="y_true")
+    score = _validate_scores(_as_1d_array(y_score, name="y_score"))
+    if len(true) != len(score):
+        raise EvaluationError("y_true and y_score lengths must match.")
+
+    observed_positive_rate, mean_predicted_probability = _uniform_calibration_curve(
+        true,
+        score,
+        n_bins=CALIBRATION_N_BINS,
+    )
+    positive_count = int(true.sum())
+    row_count = len(true)
+    metrics = CalibrationMetrics(
+        row_count=row_count,
+        positive_count=positive_count,
+        negative_count=int(row_count - positive_count),
+        positive_rate=float(positive_count / row_count),
+        brier_score=float(brier_score_loss(true, score, pos_label=POSITIVE_LABEL)),
+    )
+    curve = CalibrationCurve(
+        mean_predicted_probability=tuple(
+            float(value) for value in mean_predicted_probability
+        ),
+        observed_positive_rate=tuple(
+            float(value) for value in observed_positive_rate
+        ),
+        requested_bin_count=CALIBRATION_N_BINS,
+        strategy=CALIBRATION_STRATEGY,
+    )
+    return CalibrationEvaluation(metrics=metrics, curve=curve)
+
+
 def top_k_metrics(
     y_true: object, y_score: object, *, fraction: float
 ) -> TopKMetrics:
@@ -358,6 +455,7 @@ def evaluate_binary_classifier(
         ranking = evaluate_ranking(true, score)
         roc_auc = ranking.metrics.roc_auc
         pr_auc = ranking.metrics.pr_auc
+    calibration = evaluate_calibration(true, score)
     top_k = {
         fraction: top_k_metrics(true, score, fraction=fraction)
         for fraction in TOP_K_FRACTIONS
@@ -366,7 +464,7 @@ def evaluate_binary_classifier(
         **basic.to_dict(),
         roc_auc=roc_auc,
         pr_auc=pr_auc,
-        brier_score=float(brier_score_loss(true, score)),
+        brier_score=calibration.metrics.brier_score,
         precision_at_5_percent=top_k[0.05].precision,
         recall_at_5_percent=top_k[0.05].recall,
         precision_at_10_percent=top_k[0.10].precision,
@@ -411,23 +509,37 @@ def build_calibration_table(
         raise EvaluationError("n_bins must be an integer greater than one.")
     edges = np.linspace(0.0, 1.0, int(n_bins) + 1)
     bin_indexes = np.digitize(score, edges[1:-1], right=True)
+    observed_rates, predicted_means = _uniform_calibration_curve(
+        true,
+        score,
+        n_bins=n_bins,
+    )
+    populated_index = 0
     rows: list[CalibrationBin] = []
     for bin_index in range(int(n_bins)):
         mask = bin_indexes == bin_index
         row_count = int(mask.sum())
         positives = int(true[mask].sum()) if row_count else 0
+        mean_predicted_risk = (
+            float(predicted_means[populated_index])
+            if row_count
+            else float("nan")
+        )
+        observed_positive_rate = (
+            float(observed_rates[populated_index])
+            if row_count
+            else float("nan")
+        )
+        if row_count:
+            populated_index += 1
         rows.append(
             CalibrationBin(
                 bin_index=bin_index,
                 lower_bound=float(edges[bin_index]),
                 upper_bound=float(edges[bin_index + 1]),
                 row_count=row_count,
-                mean_predicted_risk=(
-                    float(score[mask].mean()) if row_count else float("nan")
-                ),
-                observed_positive_rate=(
-                    float(true[mask].mean()) if row_count else float("nan")
-                ),
+                mean_predicted_risk=mean_predicted_risk,
+                observed_positive_rate=observed_positive_rate,
                 positive_count=positives,
             )
         )
