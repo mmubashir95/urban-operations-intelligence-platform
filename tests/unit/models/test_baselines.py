@@ -34,6 +34,17 @@ def test_majority_class_learns_from_train_only_and_predicts_deterministically() 
     )
 
 
+def test_majority_score_is_positive_class_training_prevalence() -> None:
+    """Majority score column 1 represents missed-target prevalence."""
+    X_train = sparse.csr_matrix(np.ones((5, 1), dtype=np.float64))
+    baseline = MajorityClassBaseline().fit(X_train, [0, 0, 0, 1, 1])
+
+    probabilities = baseline.predict_proba(sparse.csr_matrix((2, 1)))
+
+    np.testing.assert_allclose(probabilities[:, 1], [0.4, 0.4])
+    np.testing.assert_allclose(probabilities[:, 0], [0.6, 0.6])
+
+
 def test_historical_rate_uses_train_aggregates_and_global_unseen_fallback() -> None:
     """Historical scores come from train groups with finite fallback scores."""
     train = pd.DataFrame({"created_month": [1, 1, 2, 2, 2]})
@@ -50,6 +61,20 @@ def test_historical_rate_uses_train_aggregates_and_global_unseen_fallback() -> N
     repeated = HistoricalRateBaseline("created_month").fit(train, y_train)
     assert repeated.group_rates_ == baseline.group_rates_
     assert repeated.global_rate_ == baseline.global_rate_
+
+
+def test_historical_and_rule_scores_increase_with_missed_target_rate() -> None:
+    """Historical and rule score paths share positive missed-risk orientation."""
+    train = pd.DataFrame({"created_month": [1, 1, 2, 2]})
+    historical = HistoricalRateBaseline("created_month").fit(train, [0, 0, 1, 1])
+    rule = RuleBasedHistoricalRateBaseline(historical)
+    scoring = pd.DataFrame({"created_month": [1, 2]})
+
+    historical_scores = historical.predict_score(scoring)
+    rule_scores = rule.predict_score(scoring)
+
+    np.testing.assert_allclose(historical_scores, [0.0, 1.0])
+    np.testing.assert_allclose(rule_scores, historical_scores)
 
 
 def test_rule_based_threshold_selection_is_validation_only_and_deterministic() -> None:
@@ -101,6 +126,27 @@ def test_logistic_regression_accepts_sparse_input_and_bounds_probabilities() -> 
     assert np.isfinite(probabilities).all()
     assert ((probabilities >= 0.0) & (probabilities <= 1.0)).all()
     np.testing.assert_allclose(probabilities.sum(axis=1), np.ones(6))
+
+
+def test_logistic_score_is_probability_for_positive_missed_target_class() -> None:
+    """Logistic score selects sklearn probability column for class label 1."""
+    X_train = sparse.csr_matrix(
+        np.array([[0.0], [0.1], [0.2], [0.8], [0.9], [1.0]])
+    )
+    model = LogisticRegressionBaseline(max_iter=200).fit(
+        X_train,
+        [0, 0, 0, 1, 1, 1],
+        feature_names=("risk_signal",),
+    )
+
+    scores = model.predict_score(X_train)
+    positive_class_index = int(np.flatnonzero(model.model.classes_ == 1)[0])
+
+    np.testing.assert_allclose(
+        scores,
+        model.predict_proba(X_train)[:, positive_class_index],
+    )
+    assert scores[-1] > scores[0]
 
 
 def test_logistic_regression_rejects_feature_mismatch() -> None:

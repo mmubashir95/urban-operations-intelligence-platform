@@ -23,8 +23,10 @@ from sklearn.metrics import (
     brier_score_loss,
     confusion_matrix,
     f1_score,
+    precision_recall_curve,
     precision_score,
     recall_score,
+    roc_curve,
     roc_auc_score,
 )
 
@@ -33,6 +35,7 @@ TOP_K_FRACTIONS: Final = (0.05, 0.10, 0.20)
 NEGATIVE_LABEL: Final = 0
 POSITIVE_LABEL: Final = 1
 ZERO_DIVISION: Final = 0
+PR_AUC_DEFINITION: Final = "average_precision_score"
 
 
 class EvaluationError(ValueError):
@@ -79,6 +82,46 @@ class BasicClassificationMetrics:
     def to_dict(self) -> dict[str, object]:
         """Return a flat JSON-safe Phase 1 metric mapping."""
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class RankingMetrics:
+    """Phase 2 ranking summary calculated from continuous missed-risk scores.
+
+    ``pr_auc`` is the project's established name for sklearn Average Precision
+    (``average_precision_score``); it is not trapezoidal PR-curve area.
+    """
+
+    row_count: int
+    positive_count: int
+    negative_count: int
+    positive_rate: float
+    roc_auc: float
+    pr_auc: float
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a flat JSON-safe Phase 2 summary mapping."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RankingCurves:
+    """Score-derived ROC and precision-recall curve coordinates."""
+
+    roc_false_positive_rate: tuple[float, ...]
+    roc_true_positive_rate: tuple[float, ...]
+    roc_thresholds: tuple[float, ...]
+    pr_precision: tuple[float, ...]
+    pr_recall: tuple[float, ...]
+    pr_thresholds: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class RankingEvaluation:
+    """Phase 2 ranking summary and curve data for one score vector."""
+
+    metrics: RankingMetrics
+    curves: RankingCurves
 
 
 @dataclass(frozen=True)
@@ -219,6 +262,57 @@ def evaluate_basic_classifier(
     )
 
 
+def evaluate_ranking(
+    y_true: object,
+    y_score: object,
+) -> RankingEvaluation:
+    """Calculate Phase 2 ranking metrics and curves from existing risk scores.
+
+    Higher scores must mean greater risk of positive class ``1`` (missed
+    target). Both target classes are required because ROC ranking is undefined
+    for a single-class population. This function does not create predictions,
+    choose a threshold, train a model, or modify the supplied scores.
+    """
+    true = _validate_binary(_as_1d_array(y_true, name="y_true"), name="y_true")
+    score = _validate_scores(_as_1d_array(y_score, name="y_score"))
+    if len(true) != len(score):
+        raise EvaluationError("y_true and y_score lengths must match.")
+    if set(true.tolist()) != {NEGATIVE_LABEL, POSITIVE_LABEL}:
+        raise EvaluationError(
+            "Ranking evaluation requires y_true to contain both 0 and 1."
+        )
+
+    false_positive_rate, true_positive_rate, roc_thresholds = roc_curve(
+        true,
+        score,
+        pos_label=POSITIVE_LABEL,
+    )
+    pr_precision, pr_recall, pr_thresholds = precision_recall_curve(
+        true,
+        score,
+        pos_label=POSITIVE_LABEL,
+    )
+    positive_count = int(true.sum())
+    row_count = len(true)
+    metrics = RankingMetrics(
+        row_count=row_count,
+        positive_count=positive_count,
+        negative_count=int(row_count - positive_count),
+        positive_rate=float(positive_count / row_count),
+        roc_auc=float(roc_auc_score(true, score)),
+        pr_auc=float(average_precision_score(true, score)),
+    )
+    curves = RankingCurves(
+        roc_false_positive_rate=tuple(float(value) for value in false_positive_rate),
+        roc_true_positive_rate=tuple(float(value) for value in true_positive_rate),
+        roc_thresholds=tuple(float(value) for value in roc_thresholds),
+        pr_precision=tuple(float(value) for value in pr_precision),
+        pr_recall=tuple(float(value) for value in pr_recall),
+        pr_thresholds=tuple(float(value) for value in pr_thresholds),
+    )
+    return RankingEvaluation(metrics=metrics, curves=curves)
+
+
 def top_k_metrics(
     y_true: object, y_score: object, *, fraction: float
 ) -> TopKMetrics:
@@ -261,8 +355,9 @@ def evaluate_binary_classifier(
         roc_auc = float("nan")
         pr_auc = float("nan")
     else:
-        roc_auc = float(roc_auc_score(true, score))
-        pr_auc = float(average_precision_score(true, score))
+        ranking = evaluate_ranking(true, score)
+        roc_auc = ranking.metrics.roc_auc
+        pr_auc = ranking.metrics.pr_auc
     top_k = {
         fraction: top_k_metrics(true, score, fraction=fraction)
         for fraction in TOP_K_FRACTIONS

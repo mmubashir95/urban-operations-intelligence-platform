@@ -6,11 +6,14 @@ import numpy as np
 import pytest
 
 from urban_ops.models.evaluation import (
+    PR_AUC_DEFINITION,
     BasicClassificationMetrics,
     EvaluationError,
+    RankingEvaluation,
     build_calibration_table,
     evaluate_basic_classifier,
     evaluate_binary_classifier,
+    evaluate_ranking,
     metrics_row,
     top_k_metrics,
 )
@@ -152,6 +155,118 @@ def test_phase_1_result_schema_is_consistent_across_baselines() -> None:
             + row["true_negative"]
             == row["row_count"]
         )
+
+
+@pytest.mark.parametrize(
+    ("y_score", "expected_roc_auc", "expected_pr_auc"),
+    [
+        ([0.9, 0.8, 0.2, 0.1], 1.0, 1.0),
+        ([0.1, 0.2, 0.8, 0.9], 0.0, 5 / 12),
+    ],
+)
+def test_ranking_evaluation_reflects_score_orientation(
+    y_score,
+    expected_roc_auc: float,
+    expected_pr_auc: float,
+) -> None:
+    """Higher positive-class scores produce better ranking than reversed scores."""
+    result = evaluate_ranking([1, 1, 0, 0], y_score)
+
+    assert result.metrics.roc_auc == pytest.approx(expected_roc_auc)
+    assert result.metrics.pr_auc == pytest.approx(expected_pr_auc)
+
+
+def test_tied_scores_match_non_informative_ranking_references() -> None:
+    """A constant score has chance ROC-AUC and prevalence Average Precision."""
+    result = evaluate_ranking([1, 0, 1, 0], [0.5, 0.5, 0.5, 0.5])
+
+    assert result.metrics.roc_auc == pytest.approx(0.5)
+    assert result.metrics.pr_auc == pytest.approx(0.5)
+    assert result.metrics.positive_rate == pytest.approx(0.5)
+
+
+def test_ranking_curves_have_authoritative_shapes_and_ordering() -> None:
+    """ROC and PR arrays preserve sklearn's score-derived threshold contracts."""
+    result = evaluate_ranking(
+        [1, 0, 1, 0, 1, 0],
+        [0.95, 0.80, 0.70, 0.40, 0.30, 0.10],
+    )
+    curves = result.curves
+
+    assert len(curves.roc_false_positive_rate) == len(curves.roc_true_positive_rate)
+    assert len(curves.roc_true_positive_rate) == len(curves.roc_thresholds)
+    assert len(curves.pr_precision) == len(curves.pr_recall)
+    assert len(curves.pr_precision) == len(curves.pr_thresholds) + 1
+    assert curves.roc_false_positive_rate[0] == 0.0
+    assert curves.roc_true_positive_rate[0] == 0.0
+    assert curves.roc_false_positive_rate[-1] == 1.0
+    assert curves.roc_true_positive_rate[-1] == 1.0
+    assert all(
+        left <= right
+        for left, right in zip(
+            curves.roc_false_positive_rate,
+            curves.roc_false_positive_rate[1:],
+        )
+    )
+    assert all(
+        left >= right
+        for left, right in zip(curves.pr_recall, curves.pr_recall[1:])
+    )
+    assert all(
+        left < right
+        for left, right in zip(curves.pr_thresholds, curves.pr_thresholds[1:])
+    )
+
+
+def test_ranking_result_exposes_population_and_average_precision_definition() -> None:
+    """Phase 2 summary includes prevalence and documents the legacy PR name."""
+    result = evaluate_ranking([1, 1, 0, 0, 0], [0.9, 0.7, 0.6, 0.2, 0.1])
+
+    assert isinstance(result, RankingEvaluation)
+    assert result.metrics.row_count == 5
+    assert result.metrics.positive_count == 2
+    assert result.metrics.negative_count == 3
+    assert result.metrics.positive_rate == pytest.approx(0.4)
+    assert PR_AUC_DEFINITION == "average_precision_score"
+
+
+def test_ranking_summary_schema_is_consistent_across_baseline_scores() -> None:
+    """Every baseline score vector produces the same ranking summary contract."""
+    score_vectors = {
+        "Majority Class": [0.5, 0.5, 0.5, 0.5],
+        "Historical Rate": [0.2, 0.8, 0.3, 0.7],
+        "Rule Based": [0.2, 0.8, 0.3, 0.7],
+        "Logistic Regression": [0.1, 0.9, 0.4, 0.6],
+    }
+    summaries = [
+        evaluate_ranking([0, 1, 0, 1], scores).metrics.to_dict()
+        for scores in score_vectors.values()
+    ]
+
+    assert all(set(summary) == set(summaries[0]) for summary in summaries)
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_score", "message"),
+    [
+        ([], [], "must not be empty"),
+        ([0, 1], [0.1], "lengths must match"),
+        ([0, 2], [0.1, 0.2], "only 0/1"),
+        ([0, 1], [0.1, float("nan")], "finite"),
+        ([0, 1], [0.1, float("inf")], "finite"),
+        ([0, 1], [0.1, 1.1], "in \\[0, 1\\]"),
+        ([0, 0], [0.1, 0.2], "both 0 and 1"),
+        ([1, 1], [0.8, 0.9], "both 0 and 1"),
+    ],
+)
+def test_ranking_evaluation_rejects_invalid_or_undefined_inputs(
+    y_true,
+    y_score,
+    message: str,
+) -> None:
+    """Malformed scores and undefined single-class ranking fail explicitly."""
+    with pytest.raises(EvaluationError, match=message):
+        evaluate_ranking(y_true, y_score)
 
 
 def test_evaluate_binary_classifier_matches_manual_confusion_and_top_k() -> None:

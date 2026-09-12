@@ -9,6 +9,7 @@ untouched test split.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from dataclasses import dataclass
 import json
 import logging
@@ -61,8 +62,15 @@ from urban_ops.models.baselines import (
     RuleBasedHistoricalRateBaseline,
     predict_from_scores,
 )
-from urban_ops.models.evaluation import ClassificationMetrics, evaluate_binary_classifier, metrics_row
-from urban_ops.models.evaluation import build_calibration_table
+from urban_ops.models.evaluation import (
+    PR_AUC_DEFINITION,
+    ClassificationMetrics,
+    RankingEvaluation,
+    build_calibration_table,
+    evaluate_binary_classifier,
+    evaluate_ranking,
+    metrics_row,
+)
 from urban_ops.utils.paths import PROJECT_ROOT
 
 
@@ -121,6 +129,8 @@ class BaselineWorkflowResult:
     test_results: pd.DataFrame
     subgroup_results: pd.DataFrame
     calibration_results: pd.DataFrame
+    roc_curve_results: pd.DataFrame
+    pr_curve_results: pd.DataFrame
     selected_model_name: str
     selected_threshold: float
     selected_artifact_path: Path
@@ -289,7 +299,12 @@ def _evaluate(
 
 def _fit_and_evaluate_validation(
     inputs: FrozenBaselineInputs,
-) -> tuple[pd.DataFrame, dict[str, object], pd.DataFrame]:
+) -> tuple[
+    pd.DataFrame,
+    dict[str, object],
+    pd.DataFrame,
+    dict[str, RankingEvaluation],
+]:
     """Fit train-only baselines and evaluate all models on validation."""
     X_train = inputs.matrices["train"]
     X_validation = inputs.matrices["validation"]
@@ -369,6 +384,12 @@ def _fit_and_evaluate_validation(
         },
     ]
     validation_results = pd.DataFrame(rows)
+    ranking_evaluations = {
+        "Majority Class": evaluate_ranking(y_validation, majority_scores),
+        "Historical Rate": evaluate_ranking(y_validation, historical_scores),
+        "Rule Based": evaluate_ranking(y_validation, rule_scores),
+        "Logistic Regression": evaluate_ranking(y_validation, logistic_scores),
+    }
     model_objects: dict[str, object] = {
         "Majority Class": majority,
         "Historical Rate": historical,
@@ -385,7 +406,7 @@ def _fit_and_evaluate_validation(
         split_name="validation",
         model_name="Logistic Regression",
     )
-    return validation_results, model_objects, subgroup
+    return validation_results, model_objects, subgroup, ranking_evaluations
 
 
 def select_baseline(validation_results: pd.DataFrame) -> str:
@@ -502,12 +523,69 @@ def build_subgroup_analysis(
     return pd.DataFrame(rows)
 
 
+def build_ranking_curve_tables(
+    evaluations: Mapping[str, RankingEvaluation],
+    *,
+    split_name: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build machine-readable ROC and PR curve tables for evaluated scores."""
+    roc_rows: list[dict[str, object]] = []
+    pr_rows: list[dict[str, object]] = []
+    for model_name, evaluation in evaluations.items():
+        curves = evaluation.curves
+        roc_points = zip(
+            curves.roc_false_positive_rate,
+            curves.roc_true_positive_rate,
+            curves.roc_thresholds,
+        )
+        for point_index, (
+            false_positive_rate,
+            true_positive_rate,
+            threshold,
+        ) in enumerate(roc_points):
+            roc_rows.append(
+                {
+                    "split": split_name,
+                    "model": model_name,
+                    "point_index": point_index,
+                    "false_positive_rate": false_positive_rate,
+                    "true_positive_rate": true_positive_rate,
+                    "threshold": threshold,
+                    "roc_auc": evaluation.metrics.roc_auc,
+                }
+            )
+        for point_index, (precision, recall) in enumerate(
+            zip(curves.pr_precision, curves.pr_recall)
+        ):
+            threshold = (
+                curves.pr_thresholds[point_index]
+                if point_index < len(curves.pr_thresholds)
+                else float("nan")
+            )
+            pr_rows.append(
+                {
+                    "split": split_name,
+                    "model": model_name,
+                    "point_index": point_index,
+                    "recall": recall,
+                    "precision": precision,
+                    "threshold": threshold,
+                    "positive_rate": evaluation.metrics.positive_rate,
+                    "pr_auc": evaluation.metrics.pr_auc,
+                    "pr_auc_definition": PR_AUC_DEFINITION,
+                }
+            )
+    return pd.DataFrame(roc_rows), pd.DataFrame(pr_rows)
+
+
 def _write_tables(
     *,
     validation_results: pd.DataFrame,
     test_results: pd.DataFrame,
     subgroup_results: pd.DataFrame,
     calibration_results: pd.DataFrame,
+    roc_curve_results: pd.DataFrame,
+    pr_curve_results: pd.DataFrame,
 ) -> None:
     """Persist root-compatible and phase-local machine-readable outputs."""
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
@@ -518,6 +596,14 @@ def _write_tables(
         subgroup_results.to_csv(directory / "baseline_subgroup_results.csv", index=False)
         calibration_results.to_csv(
             directory / "logistic_regression_calibration.csv",
+            index=False,
+        )
+        roc_curve_results.to_csv(
+            directory / "baseline_validation_roc_curve.csv",
+            index=False,
+        )
+        pr_curve_results.to_csv(
+            directory / "baseline_validation_pr_curve.csv",
             index=False,
         )
 
@@ -577,6 +663,81 @@ def _write_calibration_figure(calibration_results: pd.DataFrame) -> None:
     plt.close(figure)
 
 
+def _write_ranking_figures(
+    *,
+    validation_results: pd.DataFrame,
+    roc_curve_results: pd.DataFrame,
+    pr_curve_results: pd.DataFrame,
+) -> None:
+    """Write deterministic validation ROC and precision-recall figures."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    model_order = validation_results["model"].tolist()
+
+    roc_figure, roc_axis = plt.subplots(figsize=(7, 5), dpi=150)
+    for model_name in model_order:
+        curve = roc_curve_results.loc[roc_curve_results["model"].eq(model_name)]
+        roc_auc = float(curve["roc_auc"].iloc[0])
+        roc_axis.plot(
+            curve["false_positive_rate"],
+            curve["true_positive_rate"],
+            linewidth=1.5,
+            label=f"{model_name} (ROC-AUC={roc_auc:.4f})",
+        )
+    roc_axis.plot(
+        [0.0, 1.0],
+        [0.0, 1.0],
+        color="0.5",
+        linestyle="--",
+        linewidth=1,
+        label="No skill (ROC-AUC=0.5000)",
+    )
+    roc_axis.set_xlabel("False positive rate")
+    roc_axis.set_ylabel("True positive rate (recall)")
+    roc_axis.set_title("Validation ROC curves")
+    roc_axis.set_xlim(0, 1)
+    roc_axis.set_ylim(0, 1)
+    roc_axis.legend(fontsize=8)
+    roc_figure.tight_layout()
+
+    pr_figure, pr_axis = plt.subplots(figsize=(7, 5), dpi=150)
+    positive_rate = float(validation_results["positive_rate"].iloc[0])
+    for model_name in model_order:
+        curve = pr_curve_results.loc[pr_curve_results["model"].eq(model_name)]
+        pr_auc = float(curve["pr_auc"].iloc[0])
+        pr_axis.plot(
+            curve["recall"],
+            curve["precision"],
+            linewidth=1.5,
+            label=f"{model_name} (AP={pr_auc:.4f})",
+        )
+    pr_axis.axhline(
+        positive_rate,
+        color="0.5",
+        linestyle="--",
+        linewidth=1,
+        label=f"No skill (prevalence={positive_rate:.4f})",
+    )
+    pr_axis.set_xlabel("Recall")
+    pr_axis.set_ylabel("Precision")
+    pr_axis.set_title("Validation precision-recall curves")
+    pr_axis.set_xlim(0, 1)
+    pr_axis.set_ylim(0, 1)
+    pr_axis.legend(fontsize=8)
+    pr_figure.tight_layout()
+
+    for directory in (FIGURES_DIR, ROOT_FIGURES_DIR):
+        roc_figure.savefig(directory / "baseline_validation_roc_curve.png")
+        pr_figure.savefig(directory / "baseline_validation_pr_curve.png")
+    plt.close(roc_figure)
+    plt.close(pr_figure)
+
+
 def _format_metrics_table(results: pd.DataFrame) -> str:
     """Render a compact Markdown metric table."""
     columns = [
@@ -612,6 +773,18 @@ def _format_phase_1_table(results: pd.DataFrame) -> str:
         "precision",
         "recall",
         "f1",
+    ]
+    return _dataframe_to_markdown(results.loc[:, columns].copy())
+
+
+def _format_phase_2_table(results: pd.DataFrame) -> str:
+    """Render the standardized Phase 2 validation ranking comparison."""
+    columns = [
+        "model",
+        "evaluated_split",
+        "positive_rate",
+        "roc_auc",
+        "pr_auc",
     ]
     return _dataframe_to_markdown(results.loc[:, columns].copy())
 
@@ -697,6 +870,27 @@ Rows are predicted outcomes and columns are actual outcomes. A false negative
 is an actual missed-target complaint that the model failed to flag.
 
 {_format_confusion_matrices(validation_results)}
+
+## Phase 2 — Ranking Evaluation
+
+Higher scores mean greater predicted risk of missing the resolution target.
+ROC and precision-recall curves use the baselines' existing continuous
+validation scores and sklearn's score-derived thresholds; they do not select or
+change a classification threshold. In this project, `pr_auc` means sklearn
+Average Precision (`average_precision_score`), not trapezoidal PR-curve area.
+The PR no-skill reference is validation positive prevalence, not `0.5`.
+
+{_format_phase_2_table(validation_results)}
+
+Curve data:
+
+- `reports/tables/baseline_validation_roc_curve.csv`
+- `reports/tables/baseline_validation_pr_curve.csv`
+
+Figures:
+
+- `reports/figures/baseline_validation_roc_curve.png`
+- `reports/figures/baseline_validation_pr_curve.png`
 
 ## Baseline Selection
 
@@ -1046,7 +1240,16 @@ def run_baseline_workflow(
 ) -> BaselineWorkflowResult:
     """Run validation comparison, freeze selection, and evaluate test once."""
     inputs = load_frozen_baseline_inputs(split_run_path=split_run_path)
-    validation_results, model_objects, validation_subgroups = _fit_and_evaluate_validation(inputs)
+    (
+        validation_results,
+        model_objects,
+        validation_subgroups,
+        ranking_evaluations,
+    ) = _fit_and_evaluate_validation(inputs)
+    roc_curve_results, pr_curve_results = build_ranking_curve_tables(
+        ranking_evaluations,
+        split_name="validation",
+    )
     selected_model_name = select_baseline(validation_results)
     _, validation_score, selected_threshold = _split_predictions(
         selected_model_name,
@@ -1098,8 +1301,15 @@ def run_baseline_workflow(
         test_results=test_results,
         subgroup_results=subgroup_results,
         calibration_results=calibration_results,
+        roc_curve_results=roc_curve_results,
+        pr_curve_results=pr_curve_results,
     )
     _write_calibration_figure(calibration_results)
+    _write_ranking_figures(
+        validation_results=validation_results,
+        roc_curve_results=roc_curve_results,
+        pr_curve_results=pr_curve_results,
+    )
     _write_reports(
         inputs=inputs,
         validation_results=validation_results,
@@ -1115,6 +1325,8 @@ def run_baseline_workflow(
         test_results=test_results,
         subgroup_results=subgroup_results,
         calibration_results=calibration_results,
+        roc_curve_results=roc_curve_results,
+        pr_curve_results=pr_curve_results,
         selected_model_name=selected_model_name,
         selected_threshold=selected_threshold,
         selected_artifact_path=artifact_path,
