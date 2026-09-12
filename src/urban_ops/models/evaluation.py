@@ -95,10 +95,6 @@ class ClassificationMetrics(BasicClassificationMetrics):
     precision_at_20_percent: float
     recall_at_20_percent: float
 
-    def to_dict(self) -> dict[str, object]:
-        """Return a flat JSON-safe metric mapping."""
-        return asdict(self)
-
 
 @dataclass(frozen=True)
 class CalibrationBin:

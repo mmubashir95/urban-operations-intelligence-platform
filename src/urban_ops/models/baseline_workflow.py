@@ -712,6 +712,12 @@ Selected threshold: {selected_threshold:.4f}
 
 {_format_metrics_table(test_results)}
 
+{_format_phase_1_table(test_results)}
+
+### Human-Readable Confusion Matrix
+
+{_format_confusion_matrices(test_results)}
+
 Selected artifact: `{artifact_path.relative_to(PROJECT_ROOT)}`
 """
     (BASELINE_REPORT_DIR / "baseline_results.md").write_text(
