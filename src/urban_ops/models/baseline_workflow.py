@@ -72,6 +72,7 @@ from urban_ops.models.evaluation import (
     build_calibration_table,
     evaluate_binary_classifier,
     evaluate_calibration,
+    evaluate_manual_thresholds,
     evaluate_ranking,
     evaluate_threshold,
     metrics_row,
@@ -136,6 +137,7 @@ class BaselineWorkflowResult:
     calibration_results: pd.DataFrame
     validation_calibration_results: pd.DataFrame
     logistic_validation_threshold_result: pd.DataFrame
+    logistic_validation_manual_threshold_results: pd.DataFrame
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
     selected_model_name: str
@@ -313,6 +315,7 @@ def _fit_and_evaluate_validation(
     dict[str, RankingEvaluation],
     dict[str, CalibrationEvaluation],
     ThresholdMetrics,
+    tuple[ThresholdMetrics, ...],
 ]:
     """Fit train-only baselines and evaluate all models on validation."""
     X_train = inputs.matrices["train"]
@@ -410,6 +413,10 @@ def _fit_and_evaluate_validation(
         logistic_scores,
         threshold=DEFAULT_CLASSIFICATION_THRESHOLD,
     )
+    logistic_manual_threshold_metrics = evaluate_manual_thresholds(
+        y_validation,
+        logistic_scores,
+    )
     model_objects: dict[str, object] = {
         "Majority Class": majority,
         "Historical Rate": historical,
@@ -433,6 +440,7 @@ def _fit_and_evaluate_validation(
         ranking_evaluations,
         calibration_evaluations,
         logistic_threshold_metrics,
+        logistic_manual_threshold_metrics,
     )
 
 
@@ -651,6 +659,22 @@ def build_logistic_validation_threshold_table(
     )
 
 
+def build_logistic_validation_manual_threshold_table(
+    metrics: tuple[ThresholdMetrics, ...],
+) -> pd.DataFrame:
+    """Build the ordered five-row Phase 4.2 validation comparison."""
+    return pd.DataFrame(
+        [
+            {
+                "model": "Logistic Regression",
+                "evaluated_split": "validation",
+                **result.to_dict(),
+            }
+            for result in metrics
+        ]
+    )
+
+
 def _write_phase_4_1_outputs(results: pd.DataFrame) -> None:
     """Write Phase 4.1's validation-only CSV and operational summary."""
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
@@ -683,6 +707,98 @@ These values describe the current operating point without judging it as good,
 bad, optimal, or selected.
 """
     (BASELINE_REPORT_DIR / "phase_4_1_default_threshold.md").write_text(
+        report,
+        encoding="utf-8",
+    )
+    report_path.write_text(report, encoding="utf-8")
+
+
+def _format_phase_4_2_comparisons(results: pd.DataFrame) -> str:
+    """Describe every manual threshold relative to the 0.50 reference row."""
+    reference = results.loc[
+        results["threshold"].eq(DEFAULT_CLASSIFICATION_THRESHOLD)
+    ].iloc[0]
+    lines: list[str] = []
+    for _, row in results.iterrows():
+        if row["threshold"] == DEFAULT_CLASSIFICATION_THRESHOLD:
+            continue
+        lines.append(
+            "- At "
+            f"{row['threshold']:.2f} versus 0.50: flagged "
+            f"{int(row['predicted_positive_count']):,} "
+            f"({int(row['predicted_positive_count'] - reference['predicted_positive_count']):+,} complaints); "
+            f"TP {int(row['true_positives']):,} "
+            f"({int(row['true_positives'] - reference['true_positives']):+,}); "
+            f"FP {int(row['false_positives']):,} "
+            f"({int(row['false_positives'] - reference['false_positives']):+,}); "
+            f"TN {int(row['true_negatives']):,} "
+            f"({int(row['true_negatives'] - reference['true_negatives']):+,}); "
+            f"FN {int(row['false_negatives']):,} "
+            f"({int(row['false_negatives'] - reference['false_negatives']):+,}); "
+            f"precision {row['precision']:.4f} "
+            f"({row['precision'] - reference['precision']:+.4f}); "
+            f"recall {row['recall']:.4f} "
+            f"({row['recall'] - reference['recall']:+.4f}); "
+            f"F1 {row['f1']:.4f} ({row['f1'] - reference['f1']:+.4f}); "
+            f"flagged rate {row['predicted_positive_rate']:.4f} "
+            f"({row['predicted_positive_rate'] - reference['predicted_positive_rate']:+.4f})."
+        )
+    return "\n".join(lines)
+
+
+def _format_phase_4_2_directional_changes(results: pd.DataFrame) -> str:
+    """Summarize observed endpoint and non-monotonic metric sequences."""
+    first = results.iloc[0]
+    last = results.iloc[-1]
+    precision_path = " -> ".join(f"{value:.4f}" for value in results["precision"])
+    f1_path = " -> ".join(f"{value:.4f}" for value in results["f1"])
+    return (
+        f"Across the ordered comparison from {first['threshold']:.2f} to "
+        f"{last['threshold']:.2f}, flagged complaints changed from "
+        f"{int(first['predicted_positive_count']):,} to "
+        f"{int(last['predicted_positive_count']):,}, true positives from "
+        f"{int(first['true_positives']):,} to {int(last['true_positives']):,}, "
+        f"false positives from {int(first['false_positives']):,} to "
+        f"{int(last['false_positives']):,}, and recall from "
+        f"{first['recall']:.4f} to {last['recall']:.4f}. True negatives "
+        f"changed from {int(first['true_negatives']):,} to "
+        f"{int(last['true_negatives']):,}, while false negatives changed from "
+        f"{int(first['false_negatives']):,} to "
+        f"{int(last['false_negatives']):,}. Observed precision followed "
+        f"{precision_path}; observed F1 followed {f1_path}. Precision and F1 "
+        "are reported as observations, not assumed to be monotonic."
+    )
+
+
+def _write_phase_4_2_outputs(results: pd.DataFrame) -> None:
+    """Write Phase 4.2's validation-only manual comparison outputs."""
+    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = PROJECT_ROOT / "reports/phase_4_2_manual_threshold_comparison.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    filename = "logistic_regression_validation_manual_thresholds.csv"
+    for directory in (TABLES_DIR, ROOT_TABLES_DIR):
+        results.to_csv(directory / filename, index=False)
+
+    report = f"""# Phase 4.2 — Manual Threshold Comparison
+
+The same Logistic Regression validation probability vector is evaluated at the
+five manually specified thresholds. Model probabilities, ranking, ROC-AUC, and
+PR-AUC do not change; only the hard-classification operating point changes. No
+threshold is ranked, optimized, recommended, or selected.
+
+{_format_phase_4_2_table(results)}
+
+## Observed Directional Changes
+
+{_format_phase_4_2_directional_changes(results)}
+
+## Comparisons With 0.50
+
+{_format_phase_4_2_comparisons(results)}
+"""
+    (BASELINE_REPORT_DIR / "phase_4_2_manual_threshold_comparison.md").write_text(
         report,
         encoding="utf-8",
     )
@@ -982,6 +1098,11 @@ def _format_phase_4_1_table(results: pd.DataFrame) -> str:
     return _dataframe_to_markdown(results.loc[:, columns].copy())
 
 
+def _format_phase_4_2_table(results: pd.DataFrame) -> str:
+    """Render Phase 4.2 using the established threshold-result columns."""
+    return _format_phase_4_1_table(results)
+
+
 def _format_confusion_matrices(results: pd.DataFrame) -> str:
     """Render readable predicted-by-actual confusion matrices for each model."""
     sections: list[str] = []
@@ -1034,6 +1155,7 @@ def _write_reports(
     subgroup_results: pd.DataFrame,
     calibration_results: pd.DataFrame,
     logistic_validation_threshold_result: pd.DataFrame,
+    logistic_validation_manual_threshold_results: pd.DataFrame,
     selected_model_name: str,
     selected_threshold: float,
     artifact_path: Path,
@@ -1131,6 +1253,22 @@ The flags capture {int(threshold_row["true_positives"]):,} of
 establish that `0.50` is good, bad, optimal, or selected.
 
 Phase 4.1 data: `reports/tables/logistic_regression_validation_threshold_050.csv`
+
+## Phase 4.2 — Manual Threshold Comparison
+
+The existing Logistic Regression validation probabilities are evaluated at
+`0.30`, `0.40`, `0.50`, `0.60`, and `0.70`, in that order. The probability
+vector and ranking metrics remain unchanged; only the hard-classification
+operating point changes. No threshold is ranked, optimized, recommended, or
+selected.
+
+{_format_phase_4_2_table(logistic_validation_manual_threshold_results)}
+
+### Comparisons With 0.50
+
+{_format_phase_4_2_comparisons(logistic_validation_manual_threshold_results)}
+
+Phase 4.2 data: `reports/tables/logistic_regression_validation_manual_thresholds.csv`
 
 ## Baseline Selection
 
@@ -1487,6 +1625,7 @@ def run_baseline_workflow(
         ranking_evaluations,
         calibration_evaluations,
         logistic_threshold_metrics,
+        logistic_manual_threshold_metrics,
     ) = _fit_and_evaluate_validation(inputs)
     roc_curve_results, pr_curve_results = build_ranking_curve_tables(
         ranking_evaluations,
@@ -1497,6 +1636,11 @@ def run_baseline_workflow(
     )
     logistic_validation_threshold_result = (
         build_logistic_validation_threshold_table(logistic_threshold_metrics)
+    )
+    logistic_validation_manual_threshold_results = (
+        build_logistic_validation_manual_threshold_table(
+            logistic_manual_threshold_metrics
+        )
     )
     selected_model_name = select_baseline(validation_results)
     _, validation_score, selected_threshold = _split_predictions(
@@ -1556,6 +1700,7 @@ def run_baseline_workflow(
     _write_calibration_figure(calibration_results)
     _write_validation_calibration_figure(validation_calibration_results)
     _write_phase_4_1_outputs(logistic_validation_threshold_result)
+    _write_phase_4_2_outputs(logistic_validation_manual_threshold_results)
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -1568,6 +1713,9 @@ def run_baseline_workflow(
         subgroup_results=subgroup_results,
         calibration_results=calibration_results,
         logistic_validation_threshold_result=logistic_validation_threshold_result,
+        logistic_validation_manual_threshold_results=(
+            logistic_validation_manual_threshold_results
+        ),
         selected_model_name=selected_model_name,
         selected_threshold=selected_threshold,
         artifact_path=artifact_path,
@@ -1579,6 +1727,9 @@ def run_baseline_workflow(
         calibration_results=calibration_results,
         validation_calibration_results=validation_calibration_results,
         logistic_validation_threshold_result=logistic_validation_threshold_result,
+        logistic_validation_manual_threshold_results=(
+            logistic_validation_manual_threshold_results
+        ),
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,
         selected_model_name=selected_model_name,

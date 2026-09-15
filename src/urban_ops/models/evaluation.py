@@ -40,6 +40,7 @@ PR_AUC_DEFINITION: Final = "average_precision_score"
 CALIBRATION_N_BINS: Final = 10
 CALIBRATION_STRATEGY: Final = "uniform"
 DEFAULT_CLASSIFICATION_THRESHOLD: Final = 0.5
+MANUAL_CLASSIFICATION_THRESHOLDS: Final = (0.30, 0.40, 0.50, 0.60, 0.70)
 
 
 class EvaluationError(ValueError):
@@ -495,6 +496,22 @@ def evaluate_threshold(
         f1=basic.f1,
         predicted_positive_count=predicted_positive_count,
         predicted_positive_rate=float(predicted_positive_count / basic.row_count),
+    )
+
+
+def evaluate_manual_thresholds(
+    y_true: object,
+    y_score: object,
+) -> tuple[ThresholdMetrics, ...]:
+    """Evaluate the fixed Phase 4.2 thresholds in their documented order.
+
+    Every row delegates to :func:`evaluate_threshold` with the same labels and
+    score vector. This is a manual comparison only: it does not generate a
+    threshold grid, rank results, or select an operating point.
+    """
+    return tuple(
+        evaluate_threshold(y_true, y_score, threshold=threshold)
+        for threshold in MANUAL_CLASSIFICATION_THRESHOLDS
     )
 
 

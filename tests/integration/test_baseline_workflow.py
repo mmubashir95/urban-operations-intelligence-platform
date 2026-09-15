@@ -8,14 +8,21 @@ from urban_ops.models.baseline_workflow import (
     _fit_and_evaluate_validation,
     _format_confusion_matrices,
     _write_phase_4_1_outputs,
+    _write_phase_4_2_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
     build_logistic_validation_threshold_table,
+    build_logistic_validation_manual_threshold_table,
     build_ranking_curve_tables,
     build_validation_calibration_table,
     load_frozen_baseline_inputs,
 )
-from urban_ops.models.evaluation import evaluate_basic_classifier, evaluate_threshold
+from urban_ops.models.evaluation import (
+    MANUAL_CLASSIFICATION_THRESHOLDS,
+    evaluate_basic_classifier,
+    evaluate_manual_thresholds,
+    evaluate_threshold,
+)
 from tests.unit.eda.conftest import build_eda_fixture, make_eda_frame
 
 
@@ -50,6 +57,7 @@ def test_frozen_inputs_to_logistic_validation_evaluation(tmp_path) -> None:
     predictions = model.predict(X_validation)
     metrics = evaluate_basic_classifier(y_validation, predictions)
     threshold_metrics = evaluate_threshold(y_validation, scores, threshold=0.5)
+    manual_threshold_metrics = evaluate_manual_thresholds(y_validation, scores)
 
     assert len(scores) == X_validation.shape[0] == len(y_validation)
     assert np.isfinite(scores).all()
@@ -70,6 +78,11 @@ def test_frozen_inputs_to_logistic_validation_evaluation(tmp_path) -> None:
         (scores >= threshold_metrics.threshold).astype(int),
     )
     assert threshold_metrics.sample_count == len(y_validation)
+    assert manual_threshold_metrics[2] == threshold_metrics
+    assert manual_threshold_metrics == tuple(
+        evaluate_threshold(y_validation, scores, threshold=threshold)
+        for threshold in MANUAL_CLASSIFICATION_THRESHOLDS
+    )
 
 
 def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
@@ -89,6 +102,7 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
         ranking_evaluations,
         calibration_evaluations,
         threshold_metrics,
+        manual_threshold_metrics,
     ) = _fit_and_evaluate_validation(inputs)
     confusion_tables = _format_confusion_matrices(results)
     roc_table, pr_table = build_ranking_curve_tables(
@@ -99,6 +113,9 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
         calibration_evaluations
     )
     threshold_table = build_logistic_validation_threshold_table(threshold_metrics)
+    manual_threshold_table = build_logistic_validation_manual_threshold_table(
+        manual_threshold_metrics
+    )
 
     assert results["model"].tolist() == [
         "Majority Class",
@@ -144,6 +161,24 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
     assert threshold_row["precision"] == logistic_row["precision"]
     assert threshold_row["recall"] == logistic_row["recall"]
     assert threshold_row["f1"] == logistic_row["f1"]
+    assert manual_threshold_table["threshold"].tolist() == list(
+        MANUAL_CLASSIFICATION_THRESHOLDS
+    )
+    assert manual_threshold_table["evaluated_split"].eq("validation").all()
+    assert len(manual_threshold_table) == 5
+    for column in (
+        "predicted_positive_count",
+        "predicted_positive_rate",
+        "true_positives",
+        "false_positives",
+        "recall",
+    ):
+        assert manual_threshold_table[column].is_monotonic_decreasing
+    for column in ("true_negatives", "false_negatives"):
+        assert manual_threshold_table[column].is_monotonic_increasing
+    manual_reference = manual_threshold_table.iloc[2]
+    for field in threshold_metrics.to_dict():
+        assert manual_reference[field] == threshold_row[field]
 
 
 def test_ranking_figures_use_validation_curves_and_prevalence_reference(
@@ -156,7 +191,7 @@ def test_ranking_figures_use_validation_curves_and_prevalence_reference(
         eda_config_path=fixture.config,
         split_run_path=None,
     )
-    results, _, _, ranking_evaluations, _, _ = _fit_and_evaluate_validation(inputs)
+    results, _, _, ranking_evaluations, _, _, _ = _fit_and_evaluate_validation(inputs)
     roc_table, pr_table = build_ranking_curve_tables(
         ranking_evaluations,
         split_name="validation",
@@ -193,7 +228,7 @@ def test_validation_calibration_figure_uses_all_baseline_probability_points(
         eda_config_path=fixture.config,
         split_run_path=None,
     )
-    results, _, _, _, evaluations, _ = _fit_and_evaluate_validation(inputs)
+    results, _, _, _, evaluations, _, _ = _fit_and_evaluate_validation(inputs)
     calibration_table = build_validation_calibration_table(evaluations)
     phase_figures = tmp_path / "phase_figures"
     root_figures = tmp_path / "root_figures"
@@ -264,4 +299,68 @@ def test_phase_4_1_outputs_use_full_precision_csv_and_four_decimal_markdown(
     assert "does not select or optimize a threshold" in report
     assert report == (
         project_root / "reports/phase_4_1_default_threshold.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_phase_4_2_outputs_preserve_manual_order_and_report_comparisons(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The five validation rows are persisted in manual, not metric, order."""
+    metrics = evaluate_manual_thresholds(
+        [1, 0, 1, 0, 1],
+        [0.80, 0.65, 0.45, 0.35, 0.25],
+    )
+    results = build_logistic_validation_manual_threshold_table(metrics)
+    phase_report_dir = tmp_path / "phase"
+    phase_tables_dir = phase_report_dir / "tables"
+    root_tables_dir = tmp_path / "root_tables"
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        phase_report_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.TABLES_DIR",
+        phase_tables_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_TABLES_DIR",
+        root_tables_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+
+    _write_phase_4_2_outputs(results)
+
+    filename = "logistic_regression_validation_manual_thresholds.csv"
+    persisted = np.genfromtxt(
+        phase_tables_dir / filename,
+        delimiter=",",
+        names=True,
+        dtype=None,
+        encoding="utf-8",
+    )
+    report = (
+        phase_report_dir / "phase_4_2_manual_threshold_comparison.md"
+    ).read_text(encoding="utf-8")
+    normalized_report = " ".join(report.split())
+    assert persisted["threshold"].tolist() == list(MANUAL_CLASSIFICATION_THRESHOLDS)
+    assert (persisted["evaluated_split"] == "validation").all()
+    assert (root_tables_dir / filename).read_bytes() == (
+        phase_tables_dir / filename
+    ).read_bytes()
+    for threshold in MANUAL_CLASSIFICATION_THRESHOLDS:
+        assert f"{threshold:.4f}" in report
+    assert "At 0.30 versus 0.50" in report
+    assert "At 0.70 versus 0.50" in report
+    assert "not assumed to be monotonic" in report
+    assert (
+        "No threshold is ranked, optimized, recommended, or selected"
+        in normalized_report
+    )
+    assert report == (
+        project_root / "reports/phase_4_2_manual_threshold_comparison.md"
     ).read_text(encoding="utf-8")

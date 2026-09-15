@@ -9,6 +9,7 @@ from urban_ops.models.evaluation import (
     CALIBRATION_N_BINS,
     CALIBRATION_STRATEGY,
     DEFAULT_CLASSIFICATION_THRESHOLD,
+    MANUAL_CLASSIFICATION_THRESHOLDS,
     PR_AUC_DEFINITION,
     BasicClassificationMetrics,
     CalibrationEvaluation,
@@ -20,6 +21,7 @@ from urban_ops.models.evaluation import (
     evaluate_basic_classifier,
     evaluate_binary_classifier,
     evaluate_calibration,
+    evaluate_manual_thresholds,
     evaluate_ranking,
     evaluate_threshold,
     metrics_row,
@@ -127,6 +129,73 @@ def test_threshold_evaluation_is_deterministic_and_serializable() -> None:
         "predicted_positive_count",
         "predicted_positive_rate",
     }
+
+
+def test_manual_threshold_comparison_matches_hand_calculated_counts() -> None:
+    """Five explicit thresholds produce manually verifiable confusion counts."""
+    results = evaluate_manual_thresholds(
+        [1, 0, 1, 0, 1],
+        [0.80, 0.65, 0.45, 0.35, 0.25],
+    )
+
+    assert tuple(result.threshold for result in results) == (
+        MANUAL_CLASSIFICATION_THRESHOLDS
+    ) == (0.30, 0.40, 0.50, 0.60, 0.70)
+    assert len(results) == 5
+    assert [
+        (
+            result.true_positives,
+            result.false_positives,
+            result.true_negatives,
+            result.false_negatives,
+            result.predicted_positive_count,
+        )
+        for result in results
+    ] == [
+        (2, 2, 0, 1, 4),
+        (2, 1, 1, 1, 3),
+        (1, 1, 1, 2, 2),
+        (1, 1, 1, 2, 2),
+        (1, 0, 2, 2, 1),
+    ]
+    assert all(result.sample_count == 5 for result in results)
+    assert all(result.actual_positive_count == 3 for result in results)
+    assert all(result.actual_positive_rate == pytest.approx(0.6) for result in results)
+
+
+def test_manual_threshold_comparison_preserves_structural_invariants() -> None:
+    """Raising a threshold can remove but cannot create positive predictions."""
+    results = evaluate_manual_thresholds(
+        [1, 0, 1, 0, 1],
+        [0.80, 0.65, 0.45, 0.35, 0.25],
+    )
+
+    for field in (
+        "predicted_positive_count",
+        "predicted_positive_rate",
+        "true_positives",
+        "false_positives",
+        "recall",
+    ):
+        values = [getattr(result, field) for result in results]
+        assert all(left >= right for left, right in zip(values, values[1:]))
+    for field in ("true_negatives", "false_negatives"):
+        values = [getattr(result, field) for result in results]
+        assert all(left <= right for left, right in zip(values, values[1:]))
+
+
+def test_manual_threshold_comparison_reuses_phase_4_1_and_is_deterministic() -> None:
+    """The 0.50 row and serialized schema remain identical to Phase 4.1."""
+    y_true = [1, 0, 1, 0, 1]
+    y_score = [0.80, 0.65, 0.45, 0.35, 0.25]
+    first = evaluate_manual_thresholds(y_true, y_score)
+    repeated = evaluate_manual_thresholds(y_true, y_score)
+    reference = evaluate_threshold(y_true, y_score, threshold=0.50)
+
+    assert first == repeated
+    assert first[2] == reference
+    schemas = [set(result.to_dict()) for result in first]
+    assert all(schema == schemas[0] for schema in schemas)
 
 
 def test_basic_evaluation_matches_hand_calculated_metric_definitions() -> None:
