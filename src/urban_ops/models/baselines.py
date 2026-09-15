@@ -20,6 +20,8 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score
 
+from urban_ops.models.evaluation import EvaluationError, classify_scores_at_threshold
+
 
 DEFAULT_RANDOM_STATE: Final = 20260806
 DEFAULT_THRESHOLD_CANDIDATES: Final = tuple(
@@ -68,18 +70,6 @@ def _validate_row_count(X: object, expected: int) -> int:
             f"X row count {row_count} does not match expected {expected}."
         )
     return row_count
-
-
-def _score_array(scores: object, *, name: str) -> np.ndarray:
-    """Validate finite risk/probability scores in [0, 1]."""
-    array = np.asarray(scores, dtype=float)
-    if array.ndim != 1 or array.size == 0:
-        raise BaselineModelError(f"{name} must be a non-empty one-dimensional vector.")
-    if not np.isfinite(array).all():
-        raise BaselineModelError(f"{name} must contain only finite values.")
-    if ((array < 0.0) | (array > 1.0)).any():
-        raise BaselineModelError(f"{name} values must be in [0, 1].")
-    return array
 
 
 class MajorityClassBaseline:
@@ -337,5 +327,12 @@ class LogisticRegressionBaseline:
 
 
 def predict_from_scores(scores: object, threshold: float) -> np.ndarray:
-    """Threshold validated risk scores into binary predictions."""
-    return (_score_array(scores, name="scores") >= float(threshold)).astype(int)
+    """Threshold scores through the shared evaluation boundary.
+
+    This backward-compatible baseline helper retains ``BaselineModelError`` at
+    its public boundary while sharing Phase 4.1's equality and validation rules.
+    """
+    try:
+        return classify_scores_at_threshold(scores, threshold=threshold)
+    except EvaluationError as exc:
+        raise BaselineModelError(str(exc)) from exc

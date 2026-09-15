@@ -39,6 +39,7 @@ ZERO_DIVISION: Final = 0
 PR_AUC_DEFINITION: Final = "average_precision_score"
 CALIBRATION_N_BINS: Final = 10
 CALIBRATION_STRATEGY: Final = "uniform"
+DEFAULT_CLASSIFICATION_THRESHOLD: Final = 0.5
 
 
 class EvaluationError(ValueError):
@@ -161,6 +162,29 @@ class CalibrationEvaluation:
 
 
 @dataclass(frozen=True)
+class ThresholdMetrics:
+    """Phase 4.1 classification behavior at one explicit score threshold."""
+
+    threshold: float
+    sample_count: int
+    actual_positive_count: int
+    actual_positive_rate: float
+    true_positives: int
+    false_positives: int
+    true_negatives: int
+    false_negatives: int
+    precision: float
+    recall: float
+    f1: float
+    predicted_positive_count: int
+    predicted_positive_rate: float
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a flat JSON-safe Phase 4.1 metric mapping."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class ClassificationMetrics(BasicClassificationMetrics):
     """Backward-compatible Month 1 classification and ranking metrics."""
 
@@ -220,6 +244,34 @@ def _validate_scores(values: np.ndarray) -> np.ndarray:
     if ((scores < 0.0) | (scores > 1.0)).any():
         raise EvaluationError("y_score values must be in [0, 1].")
     return scores
+
+
+def _validate_threshold(threshold: object) -> float:
+    """Return a finite threshold in the closed unit interval."""
+    if isinstance(threshold, (bool, np.bool_)):
+        raise EvaluationError("threshold must be a number in [0, 1].")
+    try:
+        value = float(threshold)
+    except (TypeError, ValueError) as exc:
+        raise EvaluationError("threshold must be a number in [0, 1].") from exc
+    if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise EvaluationError("threshold must be in [0, 1].")
+    return value
+
+
+def classify_scores_at_threshold(
+    y_score: object,
+    *,
+    threshold: float = DEFAULT_CLASSIFICATION_THRESHOLD,
+) -> np.ndarray:
+    """Convert probabilities to labels using ``score >= threshold`` as positive.
+
+    Scores and the threshold must be finite values in ``[0, 1]``. A score
+    exactly equal to the threshold is assigned to positive class ``1``.
+    """
+    score = _validate_scores(_as_1d_array(y_score, name="y_score"))
+    validated_threshold = _validate_threshold(threshold)
+    return (score >= validated_threshold).astype(int)
 
 
 def _uniform_calibration_curve(
@@ -408,6 +460,42 @@ def evaluate_calibration(
         strategy=CALIBRATION_STRATEGY,
     )
     return CalibrationEvaluation(metrics=metrics, curve=curve)
+
+
+def evaluate_threshold(
+    y_true: object,
+    y_score: object,
+    *,
+    threshold: float = DEFAULT_CLASSIFICATION_THRESHOLD,
+) -> ThresholdMetrics:
+    """Evaluate existing positive-class probabilities at one fixed threshold.
+
+    The evaluator does not fit a model, select a threshold, or modify scores.
+    It converts scores with ``score >= threshold`` and delegates confusion
+    counts, precision, recall, and F1 to the established Phase 1 evaluator.
+    """
+    true = _validate_binary(_as_1d_array(y_true, name="y_true"), name="y_true")
+    predictions = classify_scores_at_threshold(y_score, threshold=threshold)
+    if len(true) != len(predictions):
+        raise EvaluationError("y_true and y_score lengths must match.")
+
+    basic = evaluate_basic_classifier(true, predictions)
+    predicted_positive_count = int(predictions.sum())
+    return ThresholdMetrics(
+        threshold=_validate_threshold(threshold),
+        sample_count=basic.row_count,
+        actual_positive_count=basic.positive_count,
+        actual_positive_rate=basic.positive_rate,
+        true_positives=basic.true_positive,
+        false_positives=basic.false_positive,
+        true_negatives=basic.true_negative,
+        false_negatives=basic.false_negative,
+        precision=basic.precision,
+        recall=basic.recall,
+        f1=basic.f1,
+        predicted_positive_count=predicted_positive_count,
+        predicted_positive_rate=float(predicted_positive_count / basic.row_count),
+    )
 
 
 def top_k_metrics(

@@ -8,19 +8,125 @@ import pytest
 from urban_ops.models.evaluation import (
     CALIBRATION_N_BINS,
     CALIBRATION_STRATEGY,
+    DEFAULT_CLASSIFICATION_THRESHOLD,
     PR_AUC_DEFINITION,
     BasicClassificationMetrics,
     CalibrationEvaluation,
     EvaluationError,
     RankingEvaluation,
+    ThresholdMetrics,
     build_calibration_table,
+    classify_scores_at_threshold,
     evaluate_basic_classifier,
     evaluate_binary_classifier,
     evaluate_calibration,
     evaluate_ranking,
+    evaluate_threshold,
     metrics_row,
     top_k_metrics,
 )
+
+
+def test_threshold_conversion_includes_score_equal_to_threshold() -> None:
+    """The Phase 4.1 equality boundary assigns exact matches to class 1."""
+    predictions = classify_scores_at_threshold(
+        [0.12, 0.49, 0.50, 0.73],
+        threshold=0.50,
+    )
+
+    np.testing.assert_array_equal(predictions, [0, 0, 1, 1])
+
+
+def test_threshold_evaluation_matches_hand_calculated_operating_point() -> None:
+    """One small example verifies every Phase 4.1 count and metric directly."""
+    result = evaluate_threshold(
+        [0, 1, 1, 0],
+        [0.18, 0.42, 0.63, 0.91],
+        threshold=0.50,
+    )
+
+    assert isinstance(result, ThresholdMetrics)
+    assert result.threshold == DEFAULT_CLASSIFICATION_THRESHOLD == 0.5
+    assert result.true_positives == 1
+    assert result.false_positives == 1
+    assert result.true_negatives == 1
+    assert result.false_negatives == 1
+    assert result.precision == pytest.approx(0.5)
+    assert result.recall == pytest.approx(0.5)
+    assert result.f1 == pytest.approx(0.5)
+    assert result.predicted_positive_count == 2
+    assert result.predicted_positive_rate == pytest.approx(0.5)
+    assert result.sample_count == 4
+    assert result.actual_positive_count == 2
+    assert result.actual_positive_rate == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize(
+    ("scores", "expected_count", "expected_rate", "expected_precision"),
+    [
+        ([0.1, 0.2, 0.3, 0.4], 0, 0.0, 0.0),
+        ([0.5, 0.6, 0.7, 1.0], 4, 1.0, 0.5),
+    ],
+)
+def test_threshold_evaluation_handles_all_negative_or_positive_predictions(
+    scores,
+    expected_count: int,
+    expected_rate: float,
+    expected_precision: float,
+) -> None:
+    """Extreme prediction sets use Phase 1's explicit zero-division policy."""
+    result = evaluate_threshold([0, 1, 0, 1], scores)
+
+    assert result.predicted_positive_count == expected_count
+    assert result.predicted_positive_rate == expected_rate
+    assert result.precision == expected_precision
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_score", "threshold", "message"),
+    [
+        ([0, 1], [0.1, 0.9], -0.01, "threshold must be in"),
+        ([0, 1], [0.1, 0.9], 1.01, "threshold must be in"),
+        ([0, 1], [0.1], 0.5, "lengths must match"),
+        ([0, 1], [-0.1, 0.9], 0.5, "in \\[0, 1\\]"),
+        ([0, 1], [0.1, 1.1], 0.5, "in \\[0, 1\\]"),
+        ([0, 1], [0.1, float("nan")], 0.5, "finite"),
+        ([0, 1], [0.1, float("inf")], 0.5, "finite"),
+        ([0, 1], [0.1, float("-inf")], 0.5, "finite"),
+        ([0, 2], [0.1, 0.9], 0.5, "only 0/1"),
+    ],
+)
+def test_threshold_evaluation_rejects_invalid_inputs(
+    y_true,
+    y_score,
+    threshold: float,
+    message: str,
+) -> None:
+    """Malformed labels, probabilities, lengths, and thresholds fail clearly."""
+    with pytest.raises(EvaluationError, match=message):
+        evaluate_threshold(y_true, y_score, threshold=threshold)
+
+
+def test_threshold_evaluation_is_deterministic_and_serializable() -> None:
+    """Repeated scoring produces one stable flat result contract."""
+    expected = evaluate_threshold([0, 1, 1], [0.2, 0.5, 0.8]).to_dict()
+
+    assert evaluate_threshold([0, 1, 1], [0.2, 0.5, 0.8]).to_dict() == expected
+    assert set(expected) == {
+        "threshold",
+        "sample_count",
+        "actual_positive_count",
+        "actual_positive_rate",
+        "true_positives",
+        "false_positives",
+        "true_negatives",
+        "false_negatives",
+        "precision",
+        "recall",
+        "f1",
+        "predicted_positive_count",
+        "predicted_positive_rate",
+    }
 
 
 def test_basic_evaluation_matches_hand_calculated_metric_definitions() -> None:
