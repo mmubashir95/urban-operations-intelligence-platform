@@ -19,6 +19,7 @@ from urban_ops.models.baseline_workflow import (
     _write_phase_4_3_outputs,
     _write_threshold_tradeoff_figures,
     _write_phase_4_5_outputs,
+    _write_phase_4_6_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
     build_logistic_validation_policy_table,
@@ -27,7 +28,9 @@ from urban_ops.models.baseline_workflow import (
     build_logistic_validation_sweep_table,
     build_ranking_curve_tables,
     build_validation_calibration_table,
+    load_frozen_threshold_decision,
     load_frozen_baseline_inputs,
+    write_frozen_threshold_decision,
 )
 from urban_ops.models.evaluation import (
     MANUAL_CLASSIFICATION_THRESHOLDS,
@@ -37,6 +40,7 @@ from urban_ops.models.evaluation import (
     evaluate_threshold,
     evaluate_threshold_selection_policies,
     evaluate_threshold_sweep,
+    freeze_workload_limited_threshold,
 )
 from tests.unit.eda.conftest import build_eda_fixture, make_eda_frame
 
@@ -256,6 +260,18 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
             "predicted_positive_rate",
         ):
             assert row[column] == candidate.iloc[0][column]
+    decision = freeze_workload_limited_threshold(policy_table)
+    workload_row = policy_table.loc[
+        policy_table["policy_name"].eq("Flagged rate <= 0.30")
+    ].iloc[0]
+    assert decision.selected_threshold == workload_row["candidate_threshold"]
+    assert decision.selected_threshold in set(sweep_table["threshold"])
+    assert decision.selected_on_split == "validation"
+    assert decision.frozen is True
+    assert decision.predicted_positive_rate <= 0.30
+    assert decision.precision == workload_row["precision"]
+    assert decision.recall == workload_row["recall"]
+    assert decision.f1 == workload_row["f1"]
 
 
 def test_ranking_figures_use_validation_curves_and_prevalence_reference(
@@ -695,4 +711,58 @@ def test_phase_4_5_outputs_compare_policy_candidates_without_selecting_winner(
     assert "winner" not in normalized_report.lower()
     assert report == (
         project_root / "reports/phase_4_5_threshold_policy_candidates.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_phase_4_6_outputs_freeze_workload_policy_decision(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The frozen threshold artifact is the approved Phase 4.5 workload result."""
+    metrics = evaluate_threshold_sweep(
+        [1, 0, 1, 0, 1, 0, 1, 0],
+        [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90],
+    )
+    sweep = build_logistic_validation_sweep_table(metrics)
+    policy_table = build_logistic_validation_policy_table(
+        evaluate_threshold_selection_policies(sweep)
+    )
+    decision = freeze_workload_limited_threshold(policy_table)
+    phase_report_dir = tmp_path / "phase"
+    project_root = tmp_path / "project"
+    decision_path = project_root / "configs/models/threshold_decision.json"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        phase_report_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+
+    artifact_path = _write_phase_4_6_outputs(decision, decision_path=decision_path)
+
+    assert artifact_path == decision_path
+    loaded = load_frozen_threshold_decision(decision_path)
+    assert loaded == decision
+    rewritten_path = write_frozen_threshold_decision(loaded, path=decision_path)
+    assert load_frozen_threshold_decision(rewritten_path) == decision
+    report = (phase_report_dir / "phase_4_6_frozen_threshold_decision.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_report = " ".join(report.split())
+    assert "predicted_positive_rate <=" in report
+    assert "maximize_recall" in report
+    assert "validation" in report
+    assert "Frozen: `true`" in report
+    assert f"{decision.selected_threshold:.2f}" in report
+    assert f"{decision.precision:.4f}" in report
+    assert f"{decision.recall:.4f}" in report
+    assert "not universally optimal" in report
+    assert "Phase 4.7 can load the frozen JSON artifact" in report
+    assert "test precision" not in normalized_report.lower()
+    assert "test recall" not in normalized_report.lower()
+    assert "production performance" not in normalized_report.lower()
+    assert report == (
+        project_root / "reports/phase_4_6_frozen_threshold_decision.md"
     ).read_text(encoding="utf-8")

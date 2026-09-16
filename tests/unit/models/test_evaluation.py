@@ -17,9 +17,12 @@ from urban_ops.models.evaluation import (
     THRESHOLD_POLICY_MIN_PRECISION,
     THRESHOLD_POLICY_MIN_RECALL,
     THRESHOLD_POLICY_TIE_BREAK,
+    FROZEN_THRESHOLD_POLICY_NAME,
+    FROZEN_THRESHOLD_SECONDARY_OBJECTIVE,
     BasicClassificationMetrics,
     CalibrationEvaluation,
     EvaluationError,
+    FrozenThresholdDecision,
     RankingEvaluation,
     ThresholdPolicyResult,
     ThresholdMetrics,
@@ -33,6 +36,7 @@ from urban_ops.models.evaluation import (
     evaluate_threshold,
     evaluate_threshold_selection_policies,
     evaluate_threshold_sweep,
+    freeze_workload_limited_threshold,
     metrics_row,
     select_max_f1_policy,
     select_with_max_flagged_rate_policy,
@@ -482,6 +486,86 @@ def test_evaluate_threshold_selection_policies_returns_stable_order_and_schema()
         set(result.to_dict()) == set(ThresholdPolicyResult.__dataclass_fields__)
         for result in first
     )
+
+
+def test_freeze_workload_limited_threshold_uses_approved_policy_result() -> None:
+    """Phase 4.6 freezes the approved workload-limited Phase 4.5 candidate."""
+    policy_results = evaluate_threshold_selection_policies(_policy_sweep_fixture())
+
+    decision = freeze_workload_limited_threshold(policy_results)
+
+    assert isinstance(decision, FrozenThresholdDecision)
+    assert decision.policy_name == FROZEN_THRESHOLD_POLICY_NAME
+    assert decision.constraint_name == "predicted_positive_rate"
+    assert decision.constraint_value == pytest.approx(0.30)
+    assert decision.secondary_objective == FROZEN_THRESHOLD_SECONDARY_OBJECTIVE
+    assert decision.selected_threshold == pytest.approx(0.30)
+    assert decision.selected_on_split == "validation"
+    assert decision.frozen is True
+    assert decision.precision == pytest.approx(0.60)
+    assert decision.recall == pytest.approx(0.70)
+    assert decision.predicted_positive_rate == pytest.approx(0.30)
+
+
+def test_freeze_workload_limited_threshold_is_deterministic_and_serializable() -> None:
+    """Repeated freezing produces a stable JSON-safe decision contract."""
+    policy_results = evaluate_threshold_selection_policies(_policy_sweep_fixture())
+    first = freeze_workload_limited_threshold(policy_results)
+    repeated = freeze_workload_limited_threshold(policy_results)
+
+    assert first == repeated
+    serialized = first.to_dict()
+    assert set(serialized) == set(FrozenThresholdDecision.__dataclass_fields__)
+    assert FrozenThresholdDecision(**serialized) == first
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    [
+        (
+            lambda frame: frame.loc[
+                ~frame["policy_name"].eq("Flagged rate <= 0.30")
+            ],
+            "exactly one approved",
+        ),
+        (
+            lambda frame: frame.assign(
+                policy_name=frame["policy_name"].replace(
+                    {"Flagged rate <= 0.30": "Wrong policy"}
+                )
+            ),
+            "exactly one approved",
+        ),
+        (
+            lambda frame: frame.assign(
+                predicted_positive_rate=np.where(
+                    frame["policy_name"].eq("Flagged rate <= 0.30"), 0.31, frame["predicted_positive_rate"]
+                )
+            ),
+            "violates",
+        ),
+        (
+            lambda frame: frame.assign(
+                selection_reason=np.where(
+                    frame["policy_name"].eq("Flagged rate <= 0.30"),
+                    "Selected arbitrarily.",
+                    frame["selection_reason"],
+                )
+            ),
+            "recall maximization",
+        ),
+    ],
+)
+def test_freeze_workload_limited_threshold_rejects_invalid_provenance(
+    mutator,
+    message: str,
+) -> None:
+    """Phase 4.6 fails if the approved Phase 4.5 candidate is not intact."""
+    policy_table = pd.DataFrame(
+        [result.to_dict() for result in evaluate_threshold_selection_policies(_policy_sweep_fixture())]
+    )
+    with pytest.raises(EvaluationError, match=message):
+        freeze_workload_limited_threshold(mutator(policy_table))
 
 
 @pytest.mark.parametrize(

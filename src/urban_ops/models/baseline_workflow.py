@@ -72,6 +72,7 @@ from urban_ops.models.evaluation import (
     RankingEvaluation,
     ThresholdMetrics,
     ThresholdPolicyResult,
+    FrozenThresholdDecision,
     build_calibration_table,
     evaluate_binary_classifier,
     evaluate_calibration,
@@ -80,6 +81,7 @@ from urban_ops.models.evaluation import (
     evaluate_threshold,
     evaluate_threshold_selection_policies,
     evaluate_threshold_sweep,
+    freeze_workload_limited_threshold,
     metrics_row,
 )
 from urban_ops.utils.paths import PROJECT_ROOT
@@ -103,6 +105,9 @@ FIGURES_DIR: Final = BASELINE_REPORT_DIR / "figures"
 ROOT_TABLES_DIR: Final = PROJECT_ROOT / "reports/tables"
 ROOT_FIGURES_DIR: Final = PROJECT_ROOT / "reports/figures"
 MODEL_DIR: Final = PROJECT_ROOT / "models/baselines"
+FROZEN_THRESHOLD_DECISION_PATH: Final = (
+    PROJECT_ROOT / "configs/models/month1_logistic_regression_threshold_decision.json"
+)
 
 HISTORICAL_GROUP_COLUMN: Final = "created_month"
 SUBGROUP_COLUMNS: Final = (
@@ -145,6 +150,8 @@ class BaselineWorkflowResult:
     logistic_validation_manual_threshold_results: pd.DataFrame
     logistic_validation_sweep_results: pd.DataFrame
     logistic_validation_policy_results: pd.DataFrame
+    frozen_threshold_decision: FrozenThresholdDecision
+    frozen_threshold_decision_path: Path
     threshold_tradeoff_figure_paths: tuple[Path, ...]
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
@@ -1175,6 +1182,95 @@ Policy data: `reports/tables/{filename}`
     report_path.write_text(report, encoding="utf-8")
 
 
+def write_frozen_threshold_decision(
+    decision: FrozenThresholdDecision,
+    *,
+    path: Path = FROZEN_THRESHOLD_DECISION_PATH,
+) -> Path:
+    """Persist the authoritative Phase 4.6 frozen threshold JSON artifact."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(decision.to_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def load_frozen_threshold_decision(
+    path: Path = FROZEN_THRESHOLD_DECISION_PATH,
+) -> FrozenThresholdDecision:
+    """Load the authoritative frozen threshold decision for later phases."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return FrozenThresholdDecision(**payload)
+
+
+def _write_phase_4_6_outputs(
+    decision: FrozenThresholdDecision,
+    *,
+    decision_path: Path = FROZEN_THRESHOLD_DECISION_PATH,
+) -> Path:
+    """Write Phase 4.6's frozen threshold artifact and decision report."""
+    artifact_path = write_frozen_threshold_decision(decision, path=decision_path)
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = PROJECT_ROOT / "reports/phase_4_6_frozen_threshold_decision.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report = f"""# Phase 4.6 — Frozen Threshold Decision
+
+Phase 4.6 adopts the approved workload-limited policy and freezes the
+validation-selected threshold for later evaluation. The policy is chosen first;
+the threshold is the validation result produced by that policy.
+
+Approved policy:
+
+- Constraint: `predicted_positive_rate <= {decision.constraint_value:.2f}`
+- Secondary objective: `{decision.secondary_objective}`
+- Selected on split: `{decision.selected_on_split}`
+- Frozen: `{str(decision.frozen).lower()}`
+
+The project adopts the workload-limited policy because this baseline is intended
+to prioritize a manageable subset of complaints rather than flag nearly the
+entire population. Under that policy, Phase 4.5 selected threshold
+`{decision.selected_threshold:.2f}` on validation.
+
+## Validation Evidence
+
+| metric | value |
+| --- | ---: |
+| selected_threshold | {decision.selected_threshold:.4f} |
+| precision | {decision.precision:.4f} |
+| recall | {decision.recall:.4f} |
+| f1 | {decision.f1:.4f} |
+| true_positives | {decision.true_positives} |
+| false_positives | {decision.false_positives} |
+| true_negatives | {decision.true_negatives} |
+| false_negatives | {decision.false_negatives} |
+| predicted_positive_count | {decision.predicted_positive_count} |
+| predicted_positive_rate | {decision.predicted_positive_rate:.4f} |
+
+## Policy Context
+
+Other Phase 4.5 candidates were not adopted as the operating policy:
+
+- Max F1 selected `0.34` and flagged about `99.66%` of validation complaints.
+- Recall >= 0.70 selected `0.43` and flagged about `70.36%`.
+- Precision >= 0.50 selected `0.49`, the same candidate as the workload policy.
+
+Threshold `0.49` is not universally optimal and is not guaranteed to be best in
+production. It is the validation-selected threshold under the approved
+workload-limited policy. Phase 4.7 can load the frozen JSON artifact and apply
+this threshold without rerunning threshold selection.
+
+Machine-readable decision artifact:
+`{artifact_path.relative_to(PROJECT_ROOT)}`
+"""
+    (BASELINE_REPORT_DIR / "phase_4_6_frozen_threshold_decision.md").write_text(
+        report,
+        encoding="utf-8",
+    )
+    report_path.write_text(report, encoding="utf-8")
+    return artifact_path
+
+
 def _write_phase_4_3_outputs(results: pd.DataFrame) -> None:
     """Write Phase 4.3's deterministic validation-only threshold sweep."""
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
@@ -1597,6 +1693,8 @@ def _write_reports(
     logistic_validation_manual_threshold_results: pd.DataFrame,
     logistic_validation_sweep_results: pd.DataFrame,
     logistic_validation_policy_results: pd.DataFrame,
+    frozen_threshold_decision: FrozenThresholdDecision,
+    frozen_threshold_decision_path: Path,
     threshold_tradeoff_figure_paths: tuple[Path, ...],
     selected_model_name: str,
     selected_threshold: float,
@@ -1761,6 +1859,29 @@ test scoring, final policy choice, or threshold freeze occurs here.
 
 Phase 4.5 report: `reports/phase_4_5_threshold_policy_candidates.md`
 Phase 4.5 data: `reports/tables/logistic_regression_validation_threshold_policy_candidates.csv`
+
+## Phase 4.6 — Frozen Threshold Decision
+
+The approved operating policy is workload-limited: constrain
+`predicted_positive_rate <= {frozen_threshold_decision.constraint_value:.2f}`,
+then maximize recall on validation. Phase 4.6 reuses the Phase 4.5 workload
+policy result, verifies that the candidate satisfies the workload constraint,
+and freezes threshold `{frozen_threshold_decision.selected_threshold:.2f}`.
+
+Validation evidence at the frozen threshold: precision
+{frozen_threshold_decision.precision:.4f}, recall
+{frozen_threshold_decision.recall:.4f}, F1
+{frozen_threshold_decision.f1:.4f}, TP
+{frozen_threshold_decision.true_positives:,}, FP
+{frozen_threshold_decision.false_positives:,}, TN
+{frozen_threshold_decision.true_negatives:,}, FN
+{frozen_threshold_decision.false_negatives:,}, flagged rate
+{frozen_threshold_decision.predicted_positive_rate:.4f}. This threshold is not
+globally optimal; it is the validation-selected threshold under the approved
+policy.
+
+Frozen threshold artifact: `{frozen_threshold_decision_path.relative_to(PROJECT_ROOT)}`
+Phase 4.6 report: `reports/phase_4_6_frozen_threshold_decision.md`
 
 ## Baseline Selection
 
@@ -2141,6 +2262,9 @@ def run_baseline_workflow(
     logistic_validation_policy_results = build_logistic_validation_policy_table(
         evaluate_threshold_selection_policies(logistic_validation_sweep_results)
     )
+    frozen_threshold_decision = freeze_workload_limited_threshold(
+        logistic_validation_policy_results
+    )
     selected_model_name = select_baseline(validation_results)
     _, validation_score, selected_threshold = _split_predictions(
         selected_model_name,
@@ -2205,6 +2329,9 @@ def run_baseline_workflow(
         logistic_validation_sweep_results
     )
     _write_phase_4_5_outputs(logistic_validation_policy_results)
+    frozen_threshold_decision_path = _write_phase_4_6_outputs(
+        frozen_threshold_decision
+    )
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -2222,6 +2349,8 @@ def run_baseline_workflow(
         ),
         logistic_validation_sweep_results=logistic_validation_sweep_results,
         logistic_validation_policy_results=logistic_validation_policy_results,
+        frozen_threshold_decision=frozen_threshold_decision,
+        frozen_threshold_decision_path=frozen_threshold_decision_path,
         threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         selected_model_name=selected_model_name,
         selected_threshold=selected_threshold,
@@ -2239,6 +2368,8 @@ def run_baseline_workflow(
         ),
         logistic_validation_sweep_results=logistic_validation_sweep_results,
         logistic_validation_policy_results=logistic_validation_policy_results,
+        frozen_threshold_decision=frozen_threshold_decision,
+        frozen_threshold_decision_path=frozen_threshold_decision_path,
         threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,

@@ -53,6 +53,11 @@ THRESHOLD_POLICY_MIN_RECALL: Final = 0.70
 THRESHOLD_POLICY_MIN_PRECISION: Final = 0.50
 THRESHOLD_POLICY_MAX_FLAGGED_RATE: Final = 0.30
 THRESHOLD_POLICY_TIE_BREAK: Final = "highest_threshold"
+APPROVED_THRESHOLD_POLICY_RESULT_NAME: Final = "Flagged rate <= 0.30"
+FROZEN_THRESHOLD_POLICY_NAME: Final = "max_flagged_rate"
+FROZEN_THRESHOLD_CONSTRAINT_NAME: Final = "predicted_positive_rate"
+FROZEN_THRESHOLD_SECONDARY_OBJECTIVE: Final = "maximize_recall"
+FROZEN_THRESHOLD_SELECTED_SPLIT: Final = "validation"
 THRESHOLD_POLICY_REQUIRED_COLUMNS: Final = (
     "threshold",
     "sample_count",
@@ -243,6 +248,33 @@ class ThresholdPolicyResult:
 
     def to_dict(self) -> dict[str, object]:
         """Return a flat JSON-safe Phase 4.5 policy result mapping."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class FrozenThresholdDecision:
+    """Phase 4.6 frozen threshold selected by the approved validation policy."""
+
+    policy_name: str
+    policy_description: str
+    constraint_name: str
+    constraint_value: float
+    secondary_objective: str
+    selected_threshold: float
+    selected_on_split: str
+    precision: float
+    recall: float
+    f1: float
+    true_positives: int
+    false_positives: int
+    true_negatives: int
+    false_negatives: int
+    predicted_positive_count: int
+    predicted_positive_rate: float
+    frozen: bool
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a deterministic JSON-safe Phase 4.6 decision mapping."""
         return asdict(self)
 
 
@@ -862,6 +894,104 @@ def evaluate_threshold_selection_policies(
         select_with_min_recall_policy(data),
         select_with_min_precision_policy(data),
         select_with_max_flagged_rate_policy(data),
+    )
+
+
+def _threshold_policy_results_frame(policy_results: object) -> pd.DataFrame:
+    """Return a DataFrame view of Phase 4.5 policy results."""
+    if isinstance(policy_results, pd.DataFrame):
+        frame = policy_results.copy()
+    else:
+        try:
+            frame = pd.DataFrame([result.to_dict() for result in policy_results])
+        except TypeError as exc:
+            raise EvaluationError(
+                "threshold policy results must be a DataFrame or iterable."
+            ) from exc
+    if frame.empty:
+        raise EvaluationError("threshold policy results must not be empty.")
+    required = set(ThresholdPolicyResult.__dataclass_fields__)
+    missing = [column for column in required if column not in frame]
+    if missing:
+        raise EvaluationError(
+            "threshold policy results are missing required columns: "
+            + ", ".join(sorted(missing))
+        )
+    return frame
+
+
+def freeze_workload_limited_threshold(
+    policy_results: object,
+    *,
+    selected_on_split: str = FROZEN_THRESHOLD_SELECTED_SPLIT,
+) -> FrozenThresholdDecision:
+    """Freeze the approved workload-limited Phase 4.5 validation candidate.
+
+    This function does not search thresholds. It verifies that the approved
+    Phase 4.5 result is the workload-limited policy candidate
+    (``predicted_positive_rate <= 0.30`` then maximize recall) and copies that
+    validation evidence into the Phase 4.6 frozen decision contract.
+    """
+    frame = _threshold_policy_results_frame(policy_results)
+    approved = frame.loc[frame["policy_name"].eq(APPROVED_THRESHOLD_POLICY_RESULT_NAME)]
+    if len(approved) != 1:
+        raise EvaluationError(
+            "Phase 4.6 requires exactly one approved workload policy result."
+        )
+    row = approved.iloc[0]
+    if "evaluated_split" in frame and str(row["evaluated_split"]) != selected_on_split:
+        raise EvaluationError("approved policy result must come from validation.")
+    if not bool(row["constraint_satisfied"]):
+        raise EvaluationError("approved workload policy result is unsatisfied.")
+    if row["constraint_name"] != "maximum_predicted_positive_rate":
+        raise EvaluationError("approved policy must constrain predicted_positive_rate.")
+    constraint_value = float(row["constraint_value"])
+    if constraint_value != THRESHOLD_POLICY_MAX_FLAGGED_RATE:
+        raise EvaluationError("approved workload constraint must equal 0.30.")
+    for field in (
+        "candidate_threshold",
+        "precision",
+        "recall",
+        "f1",
+        "true_positives",
+        "false_positives",
+        "true_negatives",
+        "false_negatives",
+        "predicted_positive_count",
+        "predicted_positive_rate",
+    ):
+        if pd.isna(row[field]):
+            raise EvaluationError(f"approved policy result is missing {field}.")
+    predicted_positive_rate = float(row["predicted_positive_rate"])
+    if predicted_positive_rate > constraint_value:
+        raise EvaluationError("approved threshold violates the workload constraint.")
+    description = str(row["policy_description"])
+    reason = str(row["selection_reason"])
+    if "cap flagged workload" not in description or "maximize recall" not in description:
+        raise EvaluationError("approved policy description does not match provenance.")
+    if "highest recall" not in reason:
+        raise EvaluationError("approved policy reason does not verify recall maximization.")
+    return FrozenThresholdDecision(
+        policy_name=FROZEN_THRESHOLD_POLICY_NAME,
+        policy_description=(
+            "Approved workload-limited policy: keep predicted_positive_rate "
+            "<= 0.30, then maximize recall on validation."
+        ),
+        constraint_name=FROZEN_THRESHOLD_CONSTRAINT_NAME,
+        constraint_value=constraint_value,
+        secondary_objective=FROZEN_THRESHOLD_SECONDARY_OBJECTIVE,
+        selected_threshold=float(row["candidate_threshold"]),
+        selected_on_split=selected_on_split,
+        precision=float(row["precision"]),
+        recall=float(row["recall"]),
+        f1=float(row["f1"]),
+        true_positives=int(row["true_positives"]),
+        false_positives=int(row["false_positives"]),
+        true_negatives=int(row["true_negatives"]),
+        false_negatives=int(row["false_negatives"]),
+        predicted_positive_count=int(row["predicted_positive_count"]),
+        predicted_positive_rate=predicted_positive_rate,
+        frozen=True,
     )
 
 
