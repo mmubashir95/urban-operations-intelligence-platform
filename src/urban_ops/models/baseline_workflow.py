@@ -71,12 +71,14 @@ from urban_ops.models.evaluation import (
     ClassificationMetrics,
     RankingEvaluation,
     ThresholdMetrics,
+    ThresholdPolicyResult,
     build_calibration_table,
     evaluate_binary_classifier,
     evaluate_calibration,
     evaluate_manual_thresholds,
     evaluate_ranking,
     evaluate_threshold,
+    evaluate_threshold_selection_policies,
     evaluate_threshold_sweep,
     metrics_row,
 )
@@ -142,6 +144,7 @@ class BaselineWorkflowResult:
     logistic_validation_threshold_result: pd.DataFrame
     logistic_validation_manual_threshold_results: pd.DataFrame
     logistic_validation_sweep_results: pd.DataFrame
+    logistic_validation_policy_results: pd.DataFrame
     threshold_tradeoff_figure_paths: tuple[Path, ...]
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
@@ -832,6 +835,22 @@ def build_logistic_validation_sweep_table(
     )
 
 
+def build_logistic_validation_policy_table(
+    results: tuple[ThresholdPolicyResult, ...],
+) -> pd.DataFrame:
+    """Build the ordered Phase 4.5 validation policy-candidate table."""
+    return pd.DataFrame(
+        [
+            {
+                "model": "Logistic Regression",
+                "evaluated_split": "validation",
+                **result.to_dict(),
+            }
+            for result in results
+        ]
+    )
+
+
 def _phase_4_3_focus_region(results: pd.DataFrame) -> pd.DataFrame:
     """Return the 0.40-0.50 sweep rows used for transition reporting."""
     focus = results.loc[results["threshold"].between(0.40, 0.50)]
@@ -1084,6 +1103,76 @@ Full sweep data: `reports/tables/logistic_regression_validation_threshold_sweep.
     )
     report_path.write_text(report, encoding="utf-8")
     return figure_paths
+
+
+def _format_phase_4_5_policy_interpretation(results: pd.DataFrame) -> str:
+    """Describe candidate threshold policies without choosing between them."""
+    lines: list[str] = []
+    for _, row in results.iterrows():
+        if not bool(row["constraint_satisfied"]):
+            lines.append(
+                f"- {row['policy_name']}: no candidate threshold satisfies "
+                f"`{row['constraint_name']}` = {row['constraint_value']:.4f}. "
+                f"{row['selection_reason']}"
+            )
+            continue
+        lines.append(
+            f"- {row['policy_name']}: candidate threshold "
+            f"{row['candidate_threshold']:.2f}; precision "
+            f"{row['precision']:.4f}, recall {row['recall']:.4f}, F1 "
+            f"{row['f1']:.4f}, flagged rate "
+            f"{row['predicted_positive_rate']:.4f}, FP "
+            f"{int(row['false_positives']):,}, FN "
+            f"{int(row['false_negatives']):,}. {row['selection_reason']}"
+        )
+    return "\n".join(lines)
+
+
+def _write_phase_4_5_outputs(results: pd.DataFrame) -> None:
+    """Write Phase 4.5's validation-only policy candidate comparison."""
+    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = PROJECT_ROOT / "reports/phase_4_5_threshold_policy_candidates.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    filename = "logistic_regression_validation_threshold_policy_candidates.csv"
+    for directory in (TABLES_DIR, ROOT_TABLES_DIR):
+        results.to_csv(directory / filename, index=False)
+
+    report = f"""# Phase 4.5 — Threshold-Selection Policy Candidates
+
+Phase 4.5 applies explicit candidate threshold-selection policies to the
+existing Phase 4.3 Logistic Regression validation sweep. It does not retrain a
+model, regenerate probabilities, rebuild the sweep, score the protected test
+set, choose a final policy, freeze a threshold, or declare one policy superior.
+
+Different policies answer different questions, so there is no universally best
+threshold without first choosing the decision policy that reflects the
+operational objective.
+
+Tie-breaking is deterministic: after the policy objective is evaluated, exact
+ties prefer the highest threshold. This generally keeps equal-objective
+candidates at equal or lower workload.
+
+{_format_phase_4_5_table(results)}
+
+## Policy Interpretation
+
+{_format_phase_4_5_policy_interpretation(results)}
+
+The Max-F1 policy is a metric-balance reference. The minimum-recall policy asks
+which threshold maintains detection coverage. The minimum-precision policy asks
+which threshold maintains enough trust in flags. The workload policy asks which
+threshold keeps the flagged share within a fixed validation percentage while
+capturing as many actual misses as possible.
+
+Policy data: `reports/tables/{filename}`
+"""
+    (BASELINE_REPORT_DIR / "phase_4_5_threshold_policy_candidates.md").write_text(
+        report,
+        encoding="utf-8",
+    )
+    report_path.write_text(report, encoding="utf-8")
 
 
 def _write_phase_4_3_outputs(results: pd.DataFrame) -> None:
@@ -1430,6 +1519,27 @@ def _format_phase_4_2_table(results: pd.DataFrame) -> str:
     return _format_phase_4_1_table(results)
 
 
+def _format_phase_4_5_table(results: pd.DataFrame) -> str:
+    """Render Phase 4.5 policy candidates in a compact comparison table."""
+    columns = [
+        "policy_name",
+        "constraint_name",
+        "constraint_value",
+        "constraint_satisfied",
+        "candidate_threshold",
+        "precision",
+        "recall",
+        "f1",
+        "true_positives",
+        "false_positives",
+        "true_negatives",
+        "false_negatives",
+        "predicted_positive_count",
+        "predicted_positive_rate",
+    ]
+    return _dataframe_to_markdown(results.loc[:, columns].copy())
+
+
 def _format_confusion_matrices(results: pd.DataFrame) -> str:
     """Render readable predicted-by-actual confusion matrices for each model."""
     sections: list[str] = []
@@ -1461,7 +1571,9 @@ def _dataframe_to_markdown(frame: pd.DataFrame) -> str:
     for _, row in frame.iterrows():
         rendered: list[str] = []
         for value in row.tolist():
-            if isinstance(value, float):
+            if pd.isna(value):
+                rendered.append("—")
+            elif isinstance(value, float):
                 rendered.append(f"{value:.4f}")
             else:
                 rendered.append(str(value))
@@ -1484,6 +1596,7 @@ def _write_reports(
     logistic_validation_threshold_result: pd.DataFrame,
     logistic_validation_manual_threshold_results: pd.DataFrame,
     logistic_validation_sweep_results: pd.DataFrame,
+    logistic_validation_policy_results: pd.DataFrame,
     threshold_tradeoff_figure_paths: tuple[Path, ...],
     selected_model_name: str,
     selected_threshold: float,
@@ -1632,6 +1745,22 @@ Figures:
 {_format_phase_4_4_sensitivity_summary(logistic_validation_sweep_results)}
 
 Phase 4.4 report: `reports/phase_4_4_threshold_tradeoffs.md`
+
+## Phase 4.5 — Threshold-Selection Policy Candidates
+
+The existing Phase 4.3 validation sweep is evaluated under four explicit
+candidate policies. Each successful candidate comes from the existing sweep
+grid; no new thresholds, interpolation, model fitting, probability generation,
+test scoring, final policy choice, or threshold freeze occurs here.
+
+{_format_phase_4_5_table(logistic_validation_policy_results)}
+
+### Policy Interpretation
+
+{_format_phase_4_5_policy_interpretation(logistic_validation_policy_results)}
+
+Phase 4.5 report: `reports/phase_4_5_threshold_policy_candidates.md`
+Phase 4.5 data: `reports/tables/logistic_regression_validation_threshold_policy_candidates.csv`
 
 ## Baseline Selection
 
@@ -2009,6 +2138,9 @@ def run_baseline_workflow(
     logistic_validation_sweep_results = build_logistic_validation_sweep_table(
         logistic_sweep_metrics
     )
+    logistic_validation_policy_results = build_logistic_validation_policy_table(
+        evaluate_threshold_selection_policies(logistic_validation_sweep_results)
+    )
     selected_model_name = select_baseline(validation_results)
     _, validation_score, selected_threshold = _split_predictions(
         selected_model_name,
@@ -2072,6 +2204,7 @@ def run_baseline_workflow(
     threshold_tradeoff_figure_paths = _write_phase_4_4_outputs(
         logistic_validation_sweep_results
     )
+    _write_phase_4_5_outputs(logistic_validation_policy_results)
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -2088,6 +2221,7 @@ def run_baseline_workflow(
             logistic_validation_manual_threshold_results
         ),
         logistic_validation_sweep_results=logistic_validation_sweep_results,
+        logistic_validation_policy_results=logistic_validation_policy_results,
         threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         selected_model_name=selected_model_name,
         selected_threshold=selected_threshold,
@@ -2104,6 +2238,7 @@ def run_baseline_workflow(
             logistic_validation_manual_threshold_results
         ),
         logistic_validation_sweep_results=logistic_validation_sweep_results,
+        logistic_validation_policy_results=logistic_validation_policy_results,
         threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,

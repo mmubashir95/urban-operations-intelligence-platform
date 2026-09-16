@@ -49,6 +49,25 @@ SWEEP_CLASSIFICATION_THRESHOLDS: Final = tuple(
         SWEEP_THRESHOLD_START_HUNDREDTHS, SWEEP_THRESHOLD_STOP_HUNDREDTHS + 1
     )
 )
+THRESHOLD_POLICY_MIN_RECALL: Final = 0.70
+THRESHOLD_POLICY_MIN_PRECISION: Final = 0.50
+THRESHOLD_POLICY_MAX_FLAGGED_RATE: Final = 0.30
+THRESHOLD_POLICY_TIE_BREAK: Final = "highest_threshold"
+THRESHOLD_POLICY_REQUIRED_COLUMNS: Final = (
+    "threshold",
+    "sample_count",
+    "actual_positive_count",
+    "actual_positive_rate",
+    "true_positives",
+    "false_positives",
+    "true_negatives",
+    "false_negatives",
+    "precision",
+    "recall",
+    "f1",
+    "predicted_positive_count",
+    "predicted_positive_rate",
+)
 
 
 class EvaluationError(ValueError):
@@ -190,6 +209,40 @@ class ThresholdMetrics:
 
     def to_dict(self) -> dict[str, object]:
         """Return a flat JSON-safe Phase 4.1 metric mapping."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ThresholdPolicyResult:
+    """Phase 4.5 candidate threshold from one explicit validation policy.
+
+    A result may be unsatisfied when no row in the validation sweep meets the
+    policy constraint. Successful results always copy metrics from one existing
+    Phase 4.3 sweep row; no new threshold is invented or interpolated.
+    """
+
+    policy_name: str
+    policy_description: str
+    constraint_name: str | None
+    constraint_value: float | None
+    constraint_satisfied: bool
+    selection_reason: str
+    candidate_threshold: float | None
+    sample_count: int | None
+    actual_positive_count: int | None
+    actual_positive_rate: float | None
+    true_positives: int | None
+    false_positives: int | None
+    true_negatives: int | None
+    false_negatives: int | None
+    precision: float | None
+    recall: float | None
+    f1: float | None
+    predicted_positive_count: int | None
+    predicted_positive_rate: float | None
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a flat JSON-safe Phase 4.5 policy result mapping."""
         return asdict(self)
 
 
@@ -539,6 +592,276 @@ def evaluate_threshold_sweep(
     return tuple(
         evaluate_threshold(y_true, y_score, threshold=threshold)
         for threshold in thresholds
+    )
+
+
+def _validate_policy_constraint(value: object, *, name: str) -> float:
+    """Return a finite policy constraint in the closed unit interval."""
+    if isinstance(value, (bool, np.bool_)):
+        raise EvaluationError(f"{name} must be a number in [0, 1].")
+    try:
+        constraint = float(value)
+    except (TypeError, ValueError) as exc:
+        raise EvaluationError(f"{name} must be a number in [0, 1].") from exc
+    if not np.isfinite(constraint) or not 0.0 <= constraint <= 1.0:
+        raise EvaluationError(f"{name} must be in [0, 1].")
+    return constraint
+
+
+def _validate_threshold_sweep_frame(sweep: object) -> pd.DataFrame:
+    """Validate a Phase 4.3 threshold sweep table for policy selection."""
+    if not isinstance(sweep, pd.DataFrame):
+        raise EvaluationError("threshold sweep must be a pandas DataFrame.")
+    if sweep.empty:
+        raise EvaluationError("threshold sweep must not be empty.")
+    missing = [
+        column for column in THRESHOLD_POLICY_REQUIRED_COLUMNS if column not in sweep
+    ]
+    if missing:
+        raise EvaluationError(
+            "threshold sweep is missing required columns: " + ", ".join(missing)
+        )
+    working = sweep.loc[:, THRESHOLD_POLICY_REQUIRED_COLUMNS].copy()
+    numeric = working.apply(pd.to_numeric, errors="raise")
+    if not np.isfinite(numeric.to_numpy(dtype=float)).all():
+        raise EvaluationError("threshold sweep values must be finite.")
+    if ((numeric["threshold"] < 0.0) | (numeric["threshold"] > 1.0)).any():
+        raise EvaluationError("threshold values must be in [0, 1].")
+    for column in (
+        "actual_positive_rate",
+        "precision",
+        "recall",
+        "f1",
+        "predicted_positive_rate",
+    ):
+        if ((numeric[column] < 0.0) | (numeric[column] > 1.0)).any():
+            raise EvaluationError(f"{column} values must be in [0, 1].")
+    if numeric["threshold"].duplicated().any():
+        raise EvaluationError("threshold sweep must contain unique thresholds.")
+    return numeric.sort_values("threshold", kind="mergesort").reset_index(drop=True)
+
+
+def _policy_result_from_row(
+    *,
+    policy_name: str,
+    policy_description: str,
+    constraint_name: str | None,
+    constraint_value: float | None,
+    selection_reason: str,
+    row: pd.Series,
+) -> ThresholdPolicyResult:
+    """Copy one selected Phase 4.3 sweep row into the Phase 4.5 contract."""
+    return ThresholdPolicyResult(
+        policy_name=policy_name,
+        policy_description=policy_description,
+        constraint_name=constraint_name,
+        constraint_value=constraint_value,
+        constraint_satisfied=True,
+        selection_reason=selection_reason,
+        candidate_threshold=float(row["threshold"]),
+        sample_count=int(row["sample_count"]),
+        actual_positive_count=int(row["actual_positive_count"]),
+        actual_positive_rate=float(row["actual_positive_rate"]),
+        true_positives=int(row["true_positives"]),
+        false_positives=int(row["false_positives"]),
+        true_negatives=int(row["true_negatives"]),
+        false_negatives=int(row["false_negatives"]),
+        precision=float(row["precision"]),
+        recall=float(row["recall"]),
+        f1=float(row["f1"]),
+        predicted_positive_count=int(row["predicted_positive_count"]),
+        predicted_positive_rate=float(row["predicted_positive_rate"]),
+    )
+
+
+def _unsatisfied_policy_result(
+    *,
+    policy_name: str,
+    policy_description: str,
+    constraint_name: str,
+    constraint_value: float,
+    selection_reason: str,
+) -> ThresholdPolicyResult:
+    """Return an explicit no-candidate result for an unsatisfied policy."""
+    return ThresholdPolicyResult(
+        policy_name=policy_name,
+        policy_description=policy_description,
+        constraint_name=constraint_name,
+        constraint_value=constraint_value,
+        constraint_satisfied=False,
+        selection_reason=selection_reason,
+        candidate_threshold=None,
+        sample_count=None,
+        actual_positive_count=None,
+        actual_positive_rate=None,
+        true_positives=None,
+        false_positives=None,
+        true_negatives=None,
+        false_negatives=None,
+        precision=None,
+        recall=None,
+        f1=None,
+        predicted_positive_count=None,
+        predicted_positive_rate=None,
+    )
+
+
+def _select_by_objective(
+    candidates: pd.DataFrame,
+    *,
+    objective_column: str,
+) -> pd.Series:
+    """Select max objective, breaking exact ties by highest threshold."""
+    return candidates.sort_values(
+        [objective_column, "threshold"],
+        ascending=[False, False],
+        kind="mergesort",
+    ).iloc[0]
+
+
+def select_max_f1_policy(sweep: object) -> ThresholdPolicyResult:
+    """Select the validation sweep row with maximum F1 as a reference policy."""
+    data = _validate_threshold_sweep_frame(sweep)
+    row = _select_by_objective(data, objective_column="f1")
+    return _policy_result_from_row(
+        policy_name="Max F1",
+        policy_description=(
+            "Reference policy: choose the validation threshold with the highest F1."
+        ),
+        constraint_name=None,
+        constraint_value=None,
+        selection_reason=(
+            "Highest validation F1; ties break toward the highest threshold."
+        ),
+        row=row,
+    )
+
+
+def select_with_min_recall_policy(
+    sweep: object,
+    *,
+    min_recall: float = THRESHOLD_POLICY_MIN_RECALL,
+) -> ThresholdPolicyResult:
+    """Select max precision among thresholds satisfying recall >= min_recall."""
+    constraint = _validate_policy_constraint(min_recall, name="min_recall")
+    data = _validate_threshold_sweep_frame(sweep)
+    candidates = data.loc[data["recall"].ge(constraint)]
+    if candidates.empty:
+        return _unsatisfied_policy_result(
+            policy_name="Recall >= 0.70",
+            policy_description=(
+                "Constrained policy: preserve minimum recall, then maximize precision."
+            ),
+            constraint_name="minimum_recall",
+            constraint_value=constraint,
+            selection_reason=(
+                f"No validation threshold satisfies recall >= {constraint:.2f}."
+            ),
+        )
+    row = _select_by_objective(candidates, objective_column="precision")
+    return _policy_result_from_row(
+        policy_name="Recall >= 0.70",
+        policy_description=(
+            "Constrained policy: preserve minimum recall, then maximize precision."
+        ),
+        constraint_name="minimum_recall",
+        constraint_value=constraint,
+        selection_reason=(
+            f"Among thresholds with recall >= {constraint:.2f}, selected the "
+            "highest precision; ties break toward the highest threshold."
+        ),
+        row=row,
+    )
+
+
+def select_with_min_precision_policy(
+    sweep: object,
+    *,
+    min_precision: float = THRESHOLD_POLICY_MIN_PRECISION,
+) -> ThresholdPolicyResult:
+    """Select max recall among thresholds satisfying precision >= min_precision."""
+    constraint = _validate_policy_constraint(min_precision, name="min_precision")
+    data = _validate_threshold_sweep_frame(sweep)
+    candidates = data.loc[data["precision"].ge(constraint)]
+    if candidates.empty:
+        return _unsatisfied_policy_result(
+            policy_name="Precision >= 0.50",
+            policy_description=(
+                "Constrained policy: preserve minimum precision, then maximize recall."
+            ),
+            constraint_name="minimum_precision",
+            constraint_value=constraint,
+            selection_reason=(
+                f"No validation threshold satisfies precision >= {constraint:.2f}."
+            ),
+        )
+    row = _select_by_objective(candidates, objective_column="recall")
+    return _policy_result_from_row(
+        policy_name="Precision >= 0.50",
+        policy_description=(
+            "Constrained policy: preserve minimum precision, then maximize recall."
+        ),
+        constraint_name="minimum_precision",
+        constraint_value=constraint,
+        selection_reason=(
+            f"Among thresholds with precision >= {constraint:.2f}, selected the "
+            "highest recall; ties break toward the highest threshold."
+        ),
+        row=row,
+    )
+
+
+def select_with_max_flagged_rate_policy(
+    sweep: object,
+    *,
+    max_flagged_rate: float = THRESHOLD_POLICY_MAX_FLAGGED_RATE,
+) -> ThresholdPolicyResult:
+    """Select max recall among thresholds satisfying flagged rate <= constraint."""
+    constraint = _validate_policy_constraint(
+        max_flagged_rate, name="max_flagged_rate"
+    )
+    data = _validate_threshold_sweep_frame(sweep)
+    candidates = data.loc[data["predicted_positive_rate"].le(constraint)]
+    if candidates.empty:
+        return _unsatisfied_policy_result(
+            policy_name="Flagged rate <= 0.30",
+            policy_description=(
+                "Constrained policy: cap flagged workload, then maximize recall."
+            ),
+            constraint_name="maximum_predicted_positive_rate",
+            constraint_value=constraint,
+            selection_reason=(
+                "No validation threshold satisfies predicted_positive_rate <= "
+                f"{constraint:.2f}."
+            ),
+        )
+    row = _select_by_objective(candidates, objective_column="recall")
+    return _policy_result_from_row(
+        policy_name="Flagged rate <= 0.30",
+        policy_description=(
+            "Constrained policy: cap flagged workload, then maximize recall."
+        ),
+        constraint_name="maximum_predicted_positive_rate",
+        constraint_value=constraint,
+        selection_reason=(
+            "Among thresholds with predicted_positive_rate <= "
+            f"{constraint:.2f}, selected the highest recall; ties break toward "
+            "the highest threshold."
+        ),
+        row=row,
+    )
+
+
+def evaluate_threshold_selection_policies(
+    sweep: object,
+) -> tuple[ThresholdPolicyResult, ...]:
+    """Apply all Phase 4.5 candidate policies to one validation sweep table."""
+    data = _validate_threshold_sweep_frame(sweep)
+    return (
+        select_max_f1_policy(data),
+        select_with_min_recall_policy(data),
+        select_with_min_precision_policy(data),
+        select_with_max_flagged_rate_policy(data),
     )
 
 

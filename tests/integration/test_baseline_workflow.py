@@ -1,6 +1,7 @@
 """Integration coverage for frozen preprocessing outputs entering baselines."""
 
 import numpy as np
+import pandas as pd
 from scipy import sparse
 
 from urban_ops.models.baselines import LogisticRegressionBaseline
@@ -17,8 +18,10 @@ from urban_ops.models.baseline_workflow import (
     _write_phase_4_2_outputs,
     _write_phase_4_3_outputs,
     _write_threshold_tradeoff_figures,
+    _write_phase_4_5_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
+    build_logistic_validation_policy_table,
     build_logistic_validation_threshold_table,
     build_logistic_validation_manual_threshold_table,
     build_logistic_validation_sweep_table,
@@ -32,6 +35,7 @@ from urban_ops.models.evaluation import (
     evaluate_basic_classifier,
     evaluate_manual_thresholds,
     evaluate_threshold,
+    evaluate_threshold_selection_policies,
     evaluate_threshold_sweep,
 )
 from tests.unit.eda.conftest import build_eda_fixture, make_eda_frame
@@ -140,6 +144,9 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
         manual_threshold_metrics
     )
     sweep_table = build_logistic_validation_sweep_table(sweep_metrics)
+    policy_table = build_logistic_validation_policy_table(
+        evaluate_threshold_selection_policies(sweep_table)
+    )
 
     assert results["model"].tolist() == [
         "Majority Class",
@@ -224,6 +231,31 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
         ].iloc[0]
         for field in threshold_metrics.to_dict():
             assert sweep_row[field] == manual_row[field]
+    assert policy_table["policy_name"].tolist() == [
+        "Max F1",
+        "Recall >= 0.70",
+        "Precision >= 0.50",
+        "Flagged rate <= 0.30",
+    ]
+    assert policy_table["evaluated_split"].eq("validation").all()
+    assert policy_table["constraint_satisfied"].all()
+    for _, row in policy_table.iterrows():
+        candidate = sweep_table.loc[
+            sweep_table["threshold"].eq(row["candidate_threshold"])
+        ]
+        assert len(candidate) == 1
+        for column in (
+            "precision",
+            "recall",
+            "f1",
+            "true_positives",
+            "false_positives",
+            "true_negatives",
+            "false_negatives",
+            "predicted_positive_count",
+            "predicted_positive_rate",
+        ):
+            assert row[column] == candidate.iloc[0][column]
 
 
 def test_ranking_figures_use_validation_curves_and_prevalence_reference(
@@ -602,3 +634,65 @@ def test_phase_4_4_sensitivity_summary_uses_actual_sweep_values() -> None:
     assert "False negatives rise most sharply" in summary
     assert "false positives fall most sharply" in summary
     assert "not selected or recommended thresholds" in summary
+
+
+def test_phase_4_5_outputs_compare_policy_candidates_without_selecting_winner(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Policy candidates are persisted from the sweep without ranking winners."""
+    metrics = evaluate_threshold_sweep(
+        [1, 0, 1, 0, 1, 0, 1, 0],
+        [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90],
+    )
+    sweep = build_logistic_validation_sweep_table(metrics)
+    results = build_logistic_validation_policy_table(
+        evaluate_threshold_selection_policies(sweep)
+    )
+    phase_report_dir = tmp_path / "phase"
+    phase_tables_dir = phase_report_dir / "tables"
+    root_tables_dir = tmp_path / "root_tables"
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        phase_report_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.TABLES_DIR",
+        phase_tables_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_TABLES_DIR",
+        root_tables_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+
+    _write_phase_4_5_outputs(results)
+
+    filename = "logistic_regression_validation_threshold_policy_candidates.csv"
+    persisted = pd.read_csv(phase_tables_dir / filename)
+    report = (
+        phase_report_dir / "phase_4_5_threshold_policy_candidates.md"
+    ).read_text(encoding="utf-8")
+    normalized_report = " ".join(report.split())
+    assert persisted["policy_name"].tolist() == [
+        "Max F1",
+        "Recall >= 0.70",
+        "Precision >= 0.50",
+        "Flagged rate <= 0.30",
+    ]
+    assert (root_tables_dir / filename).read_bytes() == (
+        phase_tables_dir / filename
+    ).read_bytes()
+    assert "existing Phase 4.3 Logistic Regression validation sweep" in report
+    assert "does not retrain" in normalized_report
+    assert "freeze a threshold" in report
+    assert "Tie-breaking is deterministic" in report
+    assert "Different policies answer different questions" in report
+    assert "winner" not in normalized_report.lower()
+    assert report == (
+        project_root / "reports/phase_4_5_threshold_policy_candidates.md"
+    ).read_text(encoding="utf-8")

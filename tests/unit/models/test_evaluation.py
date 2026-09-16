@@ -3,6 +3,7 @@
 import math
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from urban_ops.models.evaluation import (
@@ -12,10 +13,15 @@ from urban_ops.models.evaluation import (
     MANUAL_CLASSIFICATION_THRESHOLDS,
     PR_AUC_DEFINITION,
     SWEEP_CLASSIFICATION_THRESHOLDS,
+    THRESHOLD_POLICY_MAX_FLAGGED_RATE,
+    THRESHOLD_POLICY_MIN_PRECISION,
+    THRESHOLD_POLICY_MIN_RECALL,
+    THRESHOLD_POLICY_TIE_BREAK,
     BasicClassificationMetrics,
     CalibrationEvaluation,
     EvaluationError,
     RankingEvaluation,
+    ThresholdPolicyResult,
     ThresholdMetrics,
     build_calibration_table,
     classify_scores_at_threshold,
@@ -25,8 +31,13 @@ from urban_ops.models.evaluation import (
     evaluate_manual_thresholds,
     evaluate_ranking,
     evaluate_threshold,
+    evaluate_threshold_selection_policies,
     evaluate_threshold_sweep,
     metrics_row,
+    select_max_f1_policy,
+    select_with_max_flagged_rate_policy,
+    select_with_min_precision_policy,
+    select_with_min_recall_policy,
     top_k_metrics,
 )
 
@@ -310,6 +321,210 @@ def test_evaluate_threshold_sweep_is_deterministic_and_schema_stable() -> None:
     schemas = [set(result.to_dict()) for result in first]
     assert all(schema == schemas[0] for schema in schemas)
     assert schemas[0] == set(ThresholdMetrics.__dataclass_fields__)
+
+
+def _policy_sweep_fixture() -> pd.DataFrame:
+    """Return a tiny Phase 4.3-shaped sweep with manual policy expectations."""
+    return pd.DataFrame(
+        [
+            {
+                "threshold": 0.10,
+                "sample_count": 10,
+                "actual_positive_count": 5,
+                "actual_positive_rate": 0.5,
+                "true_positives": 5,
+                "false_positives": 5,
+                "true_negatives": 0,
+                "false_negatives": 0,
+                "precision": 0.30,
+                "recall": 0.90,
+                "f1": 0.45,
+                "predicted_positive_count": 10,
+                "predicted_positive_rate": 0.80,
+            },
+            {
+                "threshold": 0.20,
+                "sample_count": 10,
+                "actual_positive_count": 5,
+                "actual_positive_rate": 0.5,
+                "true_positives": 4,
+                "false_positives": 4,
+                "true_negatives": 1,
+                "false_negatives": 1,
+                "precision": 0.50,
+                "recall": 0.80,
+                "f1": 0.60,
+                "predicted_positive_count": 8,
+                "predicted_positive_rate": 0.50,
+            },
+            {
+                "threshold": 0.30,
+                "sample_count": 10,
+                "actual_positive_count": 5,
+                "actual_positive_rate": 0.5,
+                "true_positives": 3,
+                "false_positives": 2,
+                "true_negatives": 3,
+                "false_negatives": 2,
+                "precision": 0.60,
+                "recall": 0.70,
+                "f1": 0.65,
+                "predicted_positive_count": 5,
+                "predicted_positive_rate": 0.30,
+            },
+            {
+                "threshold": 0.40,
+                "sample_count": 10,
+                "actual_positive_count": 5,
+                "actual_positive_rate": 0.5,
+                "true_positives": 3,
+                "false_positives": 2,
+                "true_negatives": 3,
+                "false_negatives": 2,
+                "precision": 0.60,
+                "recall": 0.65,
+                "f1": 0.65,
+                "predicted_positive_count": 5,
+                "predicted_positive_rate": 0.25,
+            },
+        ]
+    )
+
+
+def test_threshold_policy_max_f1_uses_highest_threshold_tie_break() -> None:
+    """Max-F1 chooses highest F1 and breaks exact ties by higher threshold."""
+    result = select_max_f1_policy(_policy_sweep_fixture())
+
+    assert isinstance(result, ThresholdPolicyResult)
+    assert result.policy_name == "Max F1"
+    assert result.constraint_satisfied is True
+    assert result.candidate_threshold == pytest.approx(0.40)
+    assert result.f1 == pytest.approx(0.65)
+    assert THRESHOLD_POLICY_TIE_BREAK == "highest_threshold"
+
+
+def test_threshold_policy_min_recall_filters_then_maximizes_precision() -> None:
+    """Recall >= 0.70 keeps boundary rows, then picks highest precision."""
+    result = select_with_min_recall_policy(_policy_sweep_fixture())
+
+    assert result.constraint_name == "minimum_recall"
+    assert result.constraint_value == pytest.approx(THRESHOLD_POLICY_MIN_RECALL)
+    assert result.constraint_satisfied is True
+    assert result.candidate_threshold == pytest.approx(0.30)
+    assert result.recall == pytest.approx(0.70)
+    assert result.precision == pytest.approx(0.60)
+
+
+def test_threshold_policy_min_precision_filters_then_maximizes_recall() -> None:
+    """Precision >= 0.50 keeps boundary rows, then picks highest recall."""
+    result = select_with_min_precision_policy(_policy_sweep_fixture())
+
+    assert result.constraint_name == "minimum_precision"
+    assert result.constraint_value == pytest.approx(THRESHOLD_POLICY_MIN_PRECISION)
+    assert result.constraint_satisfied is True
+    assert result.candidate_threshold == pytest.approx(0.20)
+    assert result.precision == pytest.approx(0.50)
+    assert result.recall == pytest.approx(0.80)
+
+
+def test_threshold_policy_max_flagged_rate_filters_then_maximizes_recall() -> None:
+    """Flagged-rate <= 0.30 keeps boundary rows, then picks highest recall."""
+    result = select_with_max_flagged_rate_policy(_policy_sweep_fixture())
+
+    assert result.constraint_name == "maximum_predicted_positive_rate"
+    assert result.constraint_value == pytest.approx(THRESHOLD_POLICY_MAX_FLAGGED_RATE)
+    assert result.constraint_satisfied is True
+    assert result.candidate_threshold == pytest.approx(0.30)
+    assert result.predicted_positive_rate == pytest.approx(0.30)
+    assert result.recall == pytest.approx(0.70)
+
+
+def test_threshold_policy_no_candidate_is_explicit_and_serializable() -> None:
+    """Unsatisfied constraints return a stable no-candidate result."""
+    result = select_with_min_recall_policy(_policy_sweep_fixture(), min_recall=0.95)
+
+    assert result.constraint_satisfied is False
+    assert result.candidate_threshold is None
+    assert result.precision is None
+    serialized = result.to_dict()
+    assert serialized["constraint_satisfied"] is False
+    assert set(serialized) == set(ThresholdPolicyResult.__dataclass_fields__)
+
+
+def test_threshold_policy_tie_break_is_deterministic_for_constrained_policies() -> None:
+    """Equal objective values prefer the highest threshold every time."""
+    tied = _policy_sweep_fixture()
+    tied.loc[tied["threshold"].eq(0.40), "recall"] = 0.70
+
+    first = select_with_min_precision_policy(tied, min_precision=0.6)
+    repeated = select_with_min_precision_policy(
+        tied.sample(frac=1, random_state=7),
+        min_precision=0.6,
+    )
+
+    assert first.candidate_threshold == pytest.approx(0.40)
+    assert repeated == first
+
+
+def test_evaluate_threshold_selection_policies_returns_stable_order_and_schema() -> None:
+    """All four Phase 4.5 policies run in documented comparison order."""
+    first = evaluate_threshold_selection_policies(_policy_sweep_fixture())
+    repeated = evaluate_threshold_selection_policies(_policy_sweep_fixture())
+
+    assert first == repeated
+    assert tuple(result.policy_name for result in first) == (
+        "Max F1",
+        "Recall >= 0.70",
+        "Precision >= 0.50",
+        "Flagged rate <= 0.30",
+    )
+    assert all(
+        set(result.to_dict()) == set(ThresholdPolicyResult.__dataclass_fields__)
+        for result in first
+    )
+
+
+@pytest.mark.parametrize(
+    ("selector", "kwargs", "message"),
+    [
+        (select_with_min_recall_policy, {"min_recall": -0.01}, "min_recall"),
+        (select_with_min_precision_policy, {"min_precision": 1.01}, "min_precision"),
+        (
+            select_with_max_flagged_rate_policy,
+            {"max_flagged_rate": float("nan")},
+            "max_flagged_rate",
+        ),
+    ],
+)
+def test_threshold_policies_reject_invalid_constraints(
+    selector,
+    kwargs: dict[str, float],
+    message: str,
+) -> None:
+    """Policy constraints must be finite values in [0, 1]."""
+    with pytest.raises(EvaluationError, match=message):
+        selector(_policy_sweep_fixture(), **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("sweep", "message"),
+    [
+        (pd.DataFrame(), "must not be empty"),
+        (_policy_sweep_fixture().drop(columns=["precision"]), "missing required"),
+        (
+            _policy_sweep_fixture().assign(threshold=[0.1, 0.2, 0.2, 0.4]),
+            "unique thresholds",
+        ),
+        (_policy_sweep_fixture().assign(f1=[0.1, 0.2, float("inf"), 0.4]), "finite"),
+    ],
+)
+def test_threshold_policies_reject_malformed_sweeps(
+    sweep: pd.DataFrame,
+    message: str,
+) -> None:
+    """Policy selection fails clearly on malformed Phase 4.3 tables."""
+    with pytest.raises(EvaluationError, match=message):
+        evaluate_threshold_selection_policies(sweep)
 
 
 def test_basic_evaluation_matches_hand_calculated_metric_definitions() -> None:
