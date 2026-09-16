@@ -41,6 +41,14 @@ CALIBRATION_N_BINS: Final = 10
 CALIBRATION_STRATEGY: Final = "uniform"
 DEFAULT_CLASSIFICATION_THRESHOLD: Final = 0.5
 MANUAL_CLASSIFICATION_THRESHOLDS: Final = (0.30, 0.40, 0.50, 0.60, 0.70)
+SWEEP_THRESHOLD_START_HUNDREDTHS: Final = 5
+SWEEP_THRESHOLD_STOP_HUNDREDTHS: Final = 95
+SWEEP_CLASSIFICATION_THRESHOLDS: Final = tuple(
+    hundredths / 100
+    for hundredths in range(
+        SWEEP_THRESHOLD_START_HUNDREDTHS, SWEEP_THRESHOLD_STOP_HUNDREDTHS + 1
+    )
+)
 
 
 class EvaluationError(ValueError):
@@ -512,6 +520,25 @@ def evaluate_manual_thresholds(
     return tuple(
         evaluate_threshold(y_true, y_score, threshold=threshold)
         for threshold in MANUAL_CLASSIFICATION_THRESHOLDS
+    )
+
+
+def evaluate_threshold_sweep(
+    y_true: object,
+    y_score: object,
+    *,
+    thresholds: tuple[float, ...] = SWEEP_CLASSIFICATION_THRESHOLDS,
+) -> tuple[ThresholdMetrics, ...]:
+    """Evaluate the same score vector across a deterministic threshold grid.
+
+    Every row delegates to :func:`evaluate_threshold` with the same labels and
+    score vector, preserving the caller-supplied threshold order. This is a
+    descriptive sweep only: it does not rank, select, or persist a threshold,
+    and it does not modify the supplied scores.
+    """
+    return tuple(
+        evaluate_threshold(y_true, y_score, threshold=threshold)
+        for threshold in thresholds
     )
 
 

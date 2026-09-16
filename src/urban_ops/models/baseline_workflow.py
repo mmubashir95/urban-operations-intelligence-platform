@@ -64,7 +64,9 @@ from urban_ops.models.baselines import (
 )
 from urban_ops.models.evaluation import (
     DEFAULT_CLASSIFICATION_THRESHOLD,
+    MANUAL_CLASSIFICATION_THRESHOLDS,
     PR_AUC_DEFINITION,
+    SWEEP_CLASSIFICATION_THRESHOLDS,
     CalibrationEvaluation,
     ClassificationMetrics,
     RankingEvaluation,
@@ -75,6 +77,7 @@ from urban_ops.models.evaluation import (
     evaluate_manual_thresholds,
     evaluate_ranking,
     evaluate_threshold,
+    evaluate_threshold_sweep,
     metrics_row,
 )
 from urban_ops.utils.paths import PROJECT_ROOT
@@ -138,6 +141,7 @@ class BaselineWorkflowResult:
     validation_calibration_results: pd.DataFrame
     logistic_validation_threshold_result: pd.DataFrame
     logistic_validation_manual_threshold_results: pd.DataFrame
+    logistic_validation_sweep_results: pd.DataFrame
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
     selected_model_name: str
@@ -316,6 +320,7 @@ def _fit_and_evaluate_validation(
     dict[str, CalibrationEvaluation],
     ThresholdMetrics,
     tuple[ThresholdMetrics, ...],
+    tuple[ThresholdMetrics, ...],
 ]:
     """Fit train-only baselines and evaluate all models on validation."""
     X_train = inputs.matrices["train"]
@@ -417,6 +422,10 @@ def _fit_and_evaluate_validation(
         y_validation,
         logistic_scores,
     )
+    logistic_sweep_metrics = evaluate_threshold_sweep(
+        y_validation,
+        logistic_scores,
+    )
     model_objects: dict[str, object] = {
         "Majority Class": majority,
         "Historical Rate": historical,
@@ -441,6 +450,7 @@ def _fit_and_evaluate_validation(
         calibration_evaluations,
         logistic_threshold_metrics,
         logistic_manual_threshold_metrics,
+        logistic_sweep_metrics,
     )
 
 
@@ -805,6 +815,122 @@ threshold is ranked, optimized, recommended, or selected.
     report_path.write_text(report, encoding="utf-8")
 
 
+def build_logistic_validation_sweep_table(
+    metrics: tuple[ThresholdMetrics, ...],
+) -> pd.DataFrame:
+    """Build the ordered Phase 4.3 validation threshold sweep table."""
+    return pd.DataFrame(
+        [
+            {
+                "model": "Logistic Regression",
+                "evaluated_split": "validation",
+                **result.to_dict(),
+            }
+            for result in metrics
+        ]
+    )
+
+
+def _phase_4_3_focus_region(results: pd.DataFrame) -> pd.DataFrame:
+    """Return the 0.40-0.50 sweep rows used for transition reporting."""
+    focus = results.loc[results["threshold"].between(0.40, 0.50)]
+    return focus.reset_index(drop=True)
+
+
+def _format_phase_4_3_checkpoint_table(results: pd.DataFrame) -> str:
+    """Render the Phase 4.2 checkpoint thresholds as they appear in the sweep."""
+    checkpoints = results.loc[
+        results["threshold"].isin(MANUAL_CLASSIFICATION_THRESHOLDS)
+    ]
+    return _format_phase_4_1_table(checkpoints)
+
+
+def _format_phase_4_3_focus_table(results: pd.DataFrame) -> str:
+    """Render the focused 0.40-0.50 transition region."""
+    return _format_phase_4_1_table(_phase_4_3_focus_region(results))
+
+
+def _format_phase_4_3_transition_summary(results: pd.DataFrame) -> str:
+    """Describe where the 0.40-0.50 flagged-rate reduction actually occurs."""
+    focus = _phase_4_3_focus_region(results)
+    first = focus.iloc[0]
+    last = focus.iloc[-1]
+    flagged_steps = focus["predicted_positive_count"].diff().iloc[1:]
+    largest_step_position = int(flagged_steps.abs().idxmax())
+    before = focus.iloc[largest_step_position - 1]
+    after = focus.iloc[largest_step_position]
+    return (
+        f"From threshold {first['threshold']:.2f} to {last['threshold']:.2f}, "
+        f"flagged complaints fall from {int(first['predicted_positive_count']):,} "
+        f"({first['predicted_positive_rate'] * 100:.1f}%) to "
+        f"{int(last['predicted_positive_count']):,} "
+        f"({last['predicted_positive_rate'] * 100:.1f}%), true positives fall "
+        f"from {int(first['true_positives']):,} to {int(last['true_positives']):,}, "
+        f"false positives fall from {int(first['false_positives']):,} to "
+        f"{int(last['false_positives']):,}, true negatives rise from "
+        f"{int(first['true_negatives']):,} to {int(last['true_negatives']):,}, "
+        f"false negatives rise from {int(first['false_negatives']):,} to "
+        f"{int(last['false_negatives']):,}, and recall falls from "
+        f"{first['recall']:.4f} to {last['recall']:.4f}. Precision moves from "
+        f"{first['precision']:.4f} to {last['precision']:.4f} and F1 from "
+        f"{first['f1']:.4f} to {last['f1']:.4f}; neither is assumed to move "
+        "monotonically. The single largest step change in flagged complaints "
+        f"within this region occurs between {before['threshold']:.2f} and "
+        f"{after['threshold']:.2f}, where flagged complaints move from "
+        f"{int(before['predicted_positive_count']):,} to "
+        f"{int(after['predicted_positive_count']):,} "
+        f"({int(after['predicted_positive_count'] - before['predicted_positive_count']):+,}). "
+        "Threshold changes alter hard-classification metrics, not the "
+        "underlying ranking scores: ROC-AUC and PR-AUC are unaffected."
+    )
+
+
+def _write_phase_4_3_outputs(results: pd.DataFrame) -> None:
+    """Write Phase 4.3's deterministic validation-only threshold sweep."""
+    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = PROJECT_ROOT / "reports/phase_4_3_threshold_sweep.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    filename = "logistic_regression_validation_threshold_sweep.csv"
+    for directory in (TABLES_DIR, ROOT_TABLES_DIR):
+        results.to_csv(directory / filename, index=False)
+
+    first_row = results.iloc[0]
+    report = f"""# Phase 4.3 — Deterministic Threshold Sweep
+
+The same Logistic Regression validation probability vector used in Phase 4.1
+and Phase 4.2 is evaluated across a deterministic threshold grid from
+`{SWEEP_CLASSIFICATION_THRESHOLDS[0]:.2f}` to
+`{SWEEP_CLASSIFICATION_THRESHOLDS[-1]:.2f}` in steps of `0.01`, producing
+`{len(SWEEP_CLASSIFICATION_THRESHOLDS)}` rows in ascending threshold order.
+Model probabilities, ranking, ROC-AUC, and PR-AUC do not change; only the
+hard-classification operating point changes. This sweep is descriptive only:
+no threshold is ranked, optimized, recommended, or selected.
+
+Validation population: `{int(first_row["sample_count"]):,}` samples,
+`{int(first_row["actual_positive_count"]):,}` actual positives
+(`{first_row["actual_positive_rate"] * 100:.2f}%` prevalence).
+
+## Phase 4.2 Checkpoints Within The Sweep
+
+{_format_phase_4_3_checkpoint_table(results)}
+
+## 0.40-0.50 Transition Region
+
+{_format_phase_4_3_focus_table(results)}
+
+{_format_phase_4_3_transition_summary(results)}
+
+Full sweep data: `reports/tables/{filename}`
+"""
+    (BASELINE_REPORT_DIR / "phase_4_3_threshold_sweep.md").write_text(
+        report,
+        encoding="utf-8",
+    )
+    report_path.write_text(report, encoding="utf-8")
+
+
 def _write_tables(
     *,
     validation_results: pd.DataFrame,
@@ -1156,6 +1282,7 @@ def _write_reports(
     calibration_results: pd.DataFrame,
     logistic_validation_threshold_result: pd.DataFrame,
     logistic_validation_manual_threshold_results: pd.DataFrame,
+    logistic_validation_sweep_results: pd.DataFrame,
     selected_model_name: str,
     selected_threshold: float,
     artifact_path: Path,
@@ -1269,6 +1396,24 @@ selected.
 {_format_phase_4_2_comparisons(logistic_validation_manual_threshold_results)}
 
 Phase 4.2 data: `reports/tables/logistic_regression_validation_manual_thresholds.csv`
+
+## Phase 4.3 — Deterministic Threshold Sweep
+
+The same Logistic Regression validation probability vector is evaluated across
+a deterministic `{SWEEP_CLASSIFICATION_THRESHOLDS[0]:.2f}` to
+`{SWEEP_CLASSIFICATION_THRESHOLDS[-1]:.2f}` threshold grid in steps of `0.01`
+(`{len(SWEEP_CLASSIFICATION_THRESHOLDS)}` thresholds). Ranking metrics are
+unchanged; only the hard-classification operating point changes. No threshold
+is ranked, optimized, recommended, or selected.
+
+### 0.40-0.50 Transition Region
+
+{_format_phase_4_3_focus_table(logistic_validation_sweep_results)}
+
+{_format_phase_4_3_transition_summary(logistic_validation_sweep_results)}
+
+Full sweep data: `reports/tables/logistic_regression_validation_threshold_sweep.csv`
+Phase 4.3 report: `reports/phase_4_3_threshold_sweep.md`
 
 ## Baseline Selection
 
@@ -1626,6 +1771,7 @@ def run_baseline_workflow(
         calibration_evaluations,
         logistic_threshold_metrics,
         logistic_manual_threshold_metrics,
+        logistic_sweep_metrics,
     ) = _fit_and_evaluate_validation(inputs)
     roc_curve_results, pr_curve_results = build_ranking_curve_tables(
         ranking_evaluations,
@@ -1641,6 +1787,9 @@ def run_baseline_workflow(
         build_logistic_validation_manual_threshold_table(
             logistic_manual_threshold_metrics
         )
+    )
+    logistic_validation_sweep_results = build_logistic_validation_sweep_table(
+        logistic_sweep_metrics
     )
     selected_model_name = select_baseline(validation_results)
     _, validation_score, selected_threshold = _split_predictions(
@@ -1701,6 +1850,7 @@ def run_baseline_workflow(
     _write_validation_calibration_figure(validation_calibration_results)
     _write_phase_4_1_outputs(logistic_validation_threshold_result)
     _write_phase_4_2_outputs(logistic_validation_manual_threshold_results)
+    _write_phase_4_3_outputs(logistic_validation_sweep_results)
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -1716,6 +1866,7 @@ def run_baseline_workflow(
         logistic_validation_manual_threshold_results=(
             logistic_validation_manual_threshold_results
         ),
+        logistic_validation_sweep_results=logistic_validation_sweep_results,
         selected_model_name=selected_model_name,
         selected_threshold=selected_threshold,
         artifact_path=artifact_path,
@@ -1730,6 +1881,7 @@ def run_baseline_workflow(
         logistic_validation_manual_threshold_results=(
             logistic_validation_manual_threshold_results
         ),
+        logistic_validation_sweep_results=logistic_validation_sweep_results,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,
         selected_model_name=selected_model_name,

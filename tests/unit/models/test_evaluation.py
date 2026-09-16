@@ -11,6 +11,7 @@ from urban_ops.models.evaluation import (
     DEFAULT_CLASSIFICATION_THRESHOLD,
     MANUAL_CLASSIFICATION_THRESHOLDS,
     PR_AUC_DEFINITION,
+    SWEEP_CLASSIFICATION_THRESHOLDS,
     BasicClassificationMetrics,
     CalibrationEvaluation,
     EvaluationError,
@@ -24,6 +25,7 @@ from urban_ops.models.evaluation import (
     evaluate_manual_thresholds,
     evaluate_ranking,
     evaluate_threshold,
+    evaluate_threshold_sweep,
     metrics_row,
     top_k_metrics,
 )
@@ -196,6 +198,118 @@ def test_manual_threshold_comparison_reuses_phase_4_1_and_is_deterministic() -> 
     assert first[2] == reference
     schemas = [set(result.to_dict()) for result in first]
     assert all(schema == schemas[0] for schema in schemas)
+
+
+def test_sweep_threshold_grid_has_91_ascending_unique_hundredths() -> None:
+    """The default sweep grid runs 0.05 to 0.95 inclusive in 0.01 steps."""
+    assert len(SWEEP_CLASSIFICATION_THRESHOLDS) == 91
+    assert SWEEP_CLASSIFICATION_THRESHOLDS[0] == 0.05
+    assert SWEEP_CLASSIFICATION_THRESHOLDS[-1] == 0.95
+    assert list(SWEEP_CLASSIFICATION_THRESHOLDS) == sorted(
+        SWEEP_CLASSIFICATION_THRESHOLDS
+    )
+    assert len(set(SWEEP_CLASSIFICATION_THRESHOLDS)) == 91
+    steps = [
+        round(right - left, 10)
+        for left, right in zip(
+            SWEEP_CLASSIFICATION_THRESHOLDS, SWEEP_CLASSIFICATION_THRESHOLDS[1:]
+        )
+    ]
+    assert all(step == pytest.approx(0.01) for step in steps)
+
+
+def test_sweep_threshold_grid_is_independent_of_input_scores() -> None:
+    """The threshold grid itself does not depend on the supplied data."""
+    first = evaluate_threshold_sweep([1, 0], [0.2, 0.8])
+    second = evaluate_threshold_sweep([0, 1, 0, 1], [0.1, 0.9, 0.3, 0.7])
+
+    assert tuple(result.threshold for result in first) == tuple(
+        result.threshold for result in second
+    )
+
+
+def test_evaluate_threshold_sweep_delegates_to_evaluate_threshold_per_row() -> None:
+    """A small custom grid proves delegation instead of a second implementation."""
+    y_true = [1, 0, 1, 0, 1]
+    y_score = [0.80, 0.65, 0.45, 0.35, 0.25]
+    thresholds = (0.30, 0.50, 0.70)
+
+    results = evaluate_threshold_sweep(y_true, y_score, thresholds=thresholds)
+
+    assert tuple(result.threshold for result in results) == thresholds
+    assert results == tuple(
+        evaluate_threshold(y_true, y_score, threshold=threshold)
+        for threshold in thresholds
+    )
+
+
+def test_evaluate_threshold_sweep_default_matches_evaluate_threshold_per_row() -> None:
+    """Every row of the default 91-threshold sweep matches standalone evaluation."""
+    y_true = [1, 0, 1, 0, 1, 0, 1, 0]
+    y_score = [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90]
+
+    results = evaluate_threshold_sweep(y_true, y_score)
+
+    assert len(results) == 91
+    assert tuple(result.threshold for result in results) == (
+        SWEEP_CLASSIFICATION_THRESHOLDS
+    )
+    assert results == tuple(
+        evaluate_threshold(y_true, y_score, threshold=threshold)
+        for threshold in SWEEP_CLASSIFICATION_THRESHOLDS
+    )
+
+
+def test_evaluate_threshold_sweep_preserves_structural_invariants() -> None:
+    """Raising the threshold across the full grid cannot create new positives."""
+    y_true = [1, 0, 1, 0, 1, 0, 1, 0]
+    y_score = [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90]
+
+    results = evaluate_threshold_sweep(y_true, y_score)
+
+    for field in (
+        "predicted_positive_count",
+        "predicted_positive_rate",
+        "true_positives",
+        "false_positives",
+        "recall",
+    ):
+        values = [getattr(result, field) for result in results]
+        assert all(left >= right for left, right in zip(values, values[1:]))
+    for field in ("true_negatives", "false_negatives"):
+        values = [getattr(result, field) for result in results]
+        assert all(left <= right for left, right in zip(values, values[1:]))
+    assert all(result.sample_count == 8 for result in results)
+    assert all(result.actual_positive_count == 4 for result in results)
+
+
+def test_evaluate_threshold_sweep_includes_manual_checkpoints_exactly() -> None:
+    """Phase 4.2's five thresholds appear in the sweep with identical metrics."""
+    y_true = [1, 0, 1, 0, 1, 0, 1, 0]
+    y_score = [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90]
+
+    results = evaluate_threshold_sweep(y_true, y_score)
+    by_threshold = {result.threshold: result for result in results}
+
+    for checkpoint in MANUAL_CLASSIFICATION_THRESHOLDS:
+        assert checkpoint in by_threshold
+        assert by_threshold[checkpoint] == evaluate_threshold(
+            y_true, y_score, threshold=checkpoint
+        )
+
+
+def test_evaluate_threshold_sweep_is_deterministic_and_schema_stable() -> None:
+    """Repeated sweeps produce identical rows and one consistent field set."""
+    y_true = [1, 0, 1, 0, 1, 0, 1, 0]
+    y_score = [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90]
+
+    first = evaluate_threshold_sweep(y_true, y_score)
+    repeated = evaluate_threshold_sweep(y_true, y_score)
+
+    assert first == repeated
+    schemas = [set(result.to_dict()) for result in first]
+    assert all(schema == schemas[0] for schema in schemas)
+    assert schemas[0] == set(ThresholdMetrics.__dataclass_fields__)
 
 
 def test_basic_evaluation_matches_hand_calculated_metric_definitions() -> None:

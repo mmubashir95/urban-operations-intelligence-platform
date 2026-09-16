@@ -7,21 +7,28 @@ from urban_ops.models.baselines import LogisticRegressionBaseline
 from urban_ops.models.baseline_workflow import (
     _fit_and_evaluate_validation,
     _format_confusion_matrices,
+    _format_phase_4_3_focus_table,
+    _format_phase_4_3_transition_summary,
+    _phase_4_3_focus_region,
     _write_phase_4_1_outputs,
     _write_phase_4_2_outputs,
+    _write_phase_4_3_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
     build_logistic_validation_threshold_table,
     build_logistic_validation_manual_threshold_table,
+    build_logistic_validation_sweep_table,
     build_ranking_curve_tables,
     build_validation_calibration_table,
     load_frozen_baseline_inputs,
 )
 from urban_ops.models.evaluation import (
     MANUAL_CLASSIFICATION_THRESHOLDS,
+    SWEEP_CLASSIFICATION_THRESHOLDS,
     evaluate_basic_classifier,
     evaluate_manual_thresholds,
     evaluate_threshold,
+    evaluate_threshold_sweep,
 )
 from tests.unit.eda.conftest import build_eda_fixture, make_eda_frame
 
@@ -58,6 +65,7 @@ def test_frozen_inputs_to_logistic_validation_evaluation(tmp_path) -> None:
     metrics = evaluate_basic_classifier(y_validation, predictions)
     threshold_metrics = evaluate_threshold(y_validation, scores, threshold=0.5)
     manual_threshold_metrics = evaluate_manual_thresholds(y_validation, scores)
+    sweep_metrics = evaluate_threshold_sweep(y_validation, scores)
 
     assert len(scores) == X_validation.shape[0] == len(y_validation)
     assert np.isfinite(scores).all()
@@ -83,6 +91,16 @@ def test_frozen_inputs_to_logistic_validation_evaluation(tmp_path) -> None:
         evaluate_threshold(y_validation, scores, threshold=threshold)
         for threshold in MANUAL_CLASSIFICATION_THRESHOLDS
     )
+    assert len(sweep_metrics) == 91
+    assert sweep_metrics[0].threshold == 0.05
+    assert sweep_metrics[-1].threshold == 0.95
+    assert tuple(result.threshold for result in sweep_metrics) == (
+        SWEEP_CLASSIFICATION_THRESHOLDS
+    )
+    sweep_at_050 = next(
+        result for result in sweep_metrics if result.threshold == 0.5
+    )
+    assert sweep_at_050 == threshold_metrics
 
 
 def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
@@ -103,6 +121,7 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
         calibration_evaluations,
         threshold_metrics,
         manual_threshold_metrics,
+        sweep_metrics,
     ) = _fit_and_evaluate_validation(inputs)
     confusion_tables = _format_confusion_matrices(results)
     roc_table, pr_table = build_ranking_curve_tables(
@@ -116,6 +135,7 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
     manual_threshold_table = build_logistic_validation_manual_threshold_table(
         manual_threshold_metrics
     )
+    sweep_table = build_logistic_validation_sweep_table(sweep_metrics)
 
     assert results["model"].tolist() == [
         "Majority Class",
@@ -179,6 +199,27 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
     manual_reference = manual_threshold_table.iloc[2]
     for field in threshold_metrics.to_dict():
         assert manual_reference[field] == threshold_row[field]
+    assert len(sweep_table) == 91
+    assert sweep_table["threshold"].tolist() == list(SWEEP_CLASSIFICATION_THRESHOLDS)
+    assert sweep_table["evaluated_split"].eq("validation").all()
+    assert sweep_table["sample_count"].eq(len(inputs.targets["validation"])).all()
+    for column in (
+        "predicted_positive_count",
+        "predicted_positive_rate",
+        "true_positives",
+        "false_positives",
+        "recall",
+    ):
+        assert sweep_table[column].is_monotonic_decreasing
+    for column in ("true_negatives", "false_negatives"):
+        assert sweep_table[column].is_monotonic_increasing
+    for checkpoint in MANUAL_CLASSIFICATION_THRESHOLDS:
+        sweep_row = sweep_table.loc[sweep_table["threshold"].eq(checkpoint)].iloc[0]
+        manual_row = manual_threshold_table.loc[
+            manual_threshold_table["threshold"].eq(checkpoint)
+        ].iloc[0]
+        for field in threshold_metrics.to_dict():
+            assert sweep_row[field] == manual_row[field]
 
 
 def test_ranking_figures_use_validation_curves_and_prevalence_reference(
@@ -191,7 +232,9 @@ def test_ranking_figures_use_validation_curves_and_prevalence_reference(
         eda_config_path=fixture.config,
         split_run_path=None,
     )
-    results, _, _, ranking_evaluations, _, _, _ = _fit_and_evaluate_validation(inputs)
+    results, _, _, ranking_evaluations, _, _, _, _ = _fit_and_evaluate_validation(
+        inputs
+    )
     roc_table, pr_table = build_ranking_curve_tables(
         ranking_evaluations,
         split_name="validation",
@@ -228,7 +271,7 @@ def test_validation_calibration_figure_uses_all_baseline_probability_points(
         eda_config_path=fixture.config,
         split_run_path=None,
     )
-    results, _, _, _, evaluations, _, _ = _fit_and_evaluate_validation(inputs)
+    results, _, _, _, evaluations, _, _, _ = _fit_and_evaluate_validation(inputs)
     calibration_table = build_validation_calibration_table(evaluations)
     phase_figures = tmp_path / "phase_figures"
     root_figures = tmp_path / "root_figures"
@@ -364,3 +407,93 @@ def test_phase_4_2_outputs_preserve_manual_order_and_report_comparisons(
     assert report == (
         project_root / "reports/phase_4_2_manual_threshold_comparison.md"
     ).read_text(encoding="utf-8")
+
+
+def test_phase_4_3_outputs_produce_deterministic_91_row_sweep_and_focus_region(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The full sweep persists 91 ascending rows and reports the 0.40-0.50 focus."""
+    y_true = [1, 0, 1, 0, 1, 0, 1, 0]
+    y_score = [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90]
+    metrics = evaluate_threshold_sweep(y_true, y_score)
+    results = build_logistic_validation_sweep_table(metrics)
+    phase_report_dir = tmp_path / "phase"
+    phase_tables_dir = phase_report_dir / "tables"
+    root_tables_dir = tmp_path / "root_tables"
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        phase_report_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.TABLES_DIR",
+        phase_tables_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_TABLES_DIR",
+        root_tables_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+
+    _write_phase_4_3_outputs(results)
+
+    filename = "logistic_regression_validation_threshold_sweep.csv"
+    persisted = np.genfromtxt(
+        phase_tables_dir / filename,
+        delimiter=",",
+        names=True,
+        dtype=None,
+        encoding="utf-8",
+    )
+    assert len(persisted) == 91
+    assert persisted["threshold"].tolist() == list(SWEEP_CLASSIFICATION_THRESHOLDS)
+    assert (persisted["evaluated_split"] == "validation").all()
+    assert (root_tables_dir / filename).read_bytes() == (
+        phase_tables_dir / filename
+    ).read_bytes()
+
+    report = (
+        phase_report_dir / "phase_4_3_threshold_sweep.md"
+    ).read_text(encoding="utf-8")
+    normalized_report = " ".join(report.split())
+    assert "91" in report
+    assert "0.05" in report and "0.95" in report
+    assert "no threshold is ranked, optimized, recommended, or selected" in report
+    assert "ROC-AUC and PR-AUC are unaffected" in report
+    for checkpoint in MANUAL_CLASSIFICATION_THRESHOLDS:
+        assert f"{checkpoint:.4f}" in report
+    for step in range(40, 51):
+        assert f"{step / 100:.4f}" in report
+    assert "single largest step change" in normalized_report
+    assert report == (
+        project_root / "reports/phase_4_3_threshold_sweep.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_phase_4_3_focus_region_and_transition_summary_use_actual_sweep_values() -> (
+    None
+):
+    """The 0.40-0.50 helpers read directly from the sweep table, not hard-coding."""
+    y_true = [1, 0, 1, 0, 1, 0, 1, 0]
+    y_score = [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90]
+    metrics = evaluate_threshold_sweep(y_true, y_score)
+    results = build_logistic_validation_sweep_table(metrics)
+
+    focus = _phase_4_3_focus_region(results)
+
+    assert len(focus) == 11
+    assert focus["threshold"].tolist() == [round(0.40 + step * 0.01, 2) for step in range(11)]
+    assert focus["predicted_positive_count"].iloc[0] == 6
+    assert focus["predicted_positive_count"].iloc[-1] == 2
+
+    focus_table_text = _format_phase_4_3_focus_table(results)
+    for step in range(40, 51):
+        assert f"{step / 100:.4f}" in focus_table_text
+
+    summary = _format_phase_4_3_transition_summary(results)
+    assert "From threshold 0.40 to 0.50" in summary
+    assert "ROC-AUC and PR-AUC are unaffected" in summary
