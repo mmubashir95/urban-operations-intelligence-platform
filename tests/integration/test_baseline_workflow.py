@@ -6,6 +6,7 @@ from scipy import sparse
 
 from urban_ops.models.baselines import LogisticRegressionBaseline
 from urban_ops.models.baseline_workflow import (
+    build_frozen_threshold_generalization_table,
     _fit_and_evaluate_validation,
     _format_confusion_matrices,
     _format_phase_4_3_focus_table,
@@ -20,12 +21,14 @@ from urban_ops.models.baseline_workflow import (
     _write_threshold_tradeoff_figures,
     _write_phase_4_5_outputs,
     _write_phase_4_6_outputs,
+    _write_phase_4_7_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
     build_logistic_validation_policy_table,
     build_logistic_validation_threshold_table,
     build_logistic_validation_manual_threshold_table,
     build_logistic_validation_sweep_table,
+    build_logistic_test_frozen_threshold_table,
     build_ranking_curve_tables,
     build_validation_calibration_table,
     load_frozen_threshold_decision,
@@ -35,6 +38,7 @@ from urban_ops.models.baseline_workflow import (
 from urban_ops.models.evaluation import (
     MANUAL_CLASSIFICATION_THRESHOLDS,
     SWEEP_CLASSIFICATION_THRESHOLDS,
+    FrozenThresholdDecision,
     evaluate_basic_classifier,
     evaluate_manual_thresholds,
     evaluate_threshold,
@@ -765,4 +769,104 @@ def test_phase_4_6_outputs_freeze_workload_policy_decision(
     assert "production performance" not in normalized_report.lower()
     assert report == (
         project_root / "reports/phase_4_6_frozen_threshold_decision.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_phase_4_7_outputs_evaluate_test_at_frozen_threshold_without_rewriting_decision(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Phase 4.7 persists separate test evidence and leaves Phase 4.6 untouched."""
+    decision = FrozenThresholdDecision(
+        policy_name="max_flagged_rate",
+        policy_description=(
+            "Approved workload-limited policy: keep predicted_positive_rate "
+            "<= 0.30, then maximize recall on validation."
+        ),
+        constraint_name="predicted_positive_rate",
+        constraint_value=0.30,
+        secondary_objective="maximize_recall",
+        selected_threshold=0.49,
+        selected_on_split="validation",
+        precision=0.5039106145251396,
+        recall=0.3129770992366412,
+        f1=0.3861301369863014,
+        true_positives=902,
+        false_positives=888,
+        true_negatives=2992,
+        false_negatives=1980,
+        predicted_positive_count=1790,
+        predicted_positive_rate=0.2647145814847678,
+        frozen=True,
+    )
+    test_metrics = evaluate_threshold(
+        [1, 0, 1, 0],
+        [decision.selected_threshold, 0.20, 0.60, 0.80],
+        threshold=decision.selected_threshold,
+    )
+    test_result = build_logistic_test_frozen_threshold_table(test_metrics, decision)
+    gaps = build_frozen_threshold_generalization_table(
+        decision=decision,
+        test_metrics=test_metrics,
+    )
+    phase_report_dir = tmp_path / "phase"
+    root_tables_dir = tmp_path / "root" / "reports/tables"
+    project_root = tmp_path / "root"
+    decision_path = project_root / "configs/models/threshold_decision.json"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        phase_report_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.TABLES_DIR",
+        phase_report_dir / "tables",
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_TABLES_DIR",
+        root_tables_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.FROZEN_THRESHOLD_DECISION_PATH",
+        decision_path,
+    )
+    write_frozen_threshold_decision(decision, path=decision_path)
+    before = decision_path.read_bytes()
+
+    test_path, gap_path = _write_phase_4_7_outputs(
+        test_result=test_result,
+        generalization_results=gaps,
+        decision=decision,
+    )
+
+    assert decision_path.read_bytes() == before
+    assert test_path == root_tables_dir / "logistic_regression_test_frozen_threshold.csv"
+    assert gap_path == (
+        root_tables_dir
+        / "logistic_regression_test_frozen_threshold_generalization_gaps.csv"
+    )
+    written = pd.read_csv(test_path)
+    assert written.loc[0, "selection_split"] == "validation"
+    assert written.loc[0, "evaluation_split"] == "test"
+    assert written.loc[0, "threshold"] == decision.selected_threshold
+    assert written.loc[0, "true_positives"] == test_metrics.true_positives
+    assert written.loc[0, "false_positives"] == test_metrics.false_positives
+    gap_rows = pd.read_csv(gap_path)
+    precision_gap = gap_rows.loc[gap_rows["metric"].eq("precision")].iloc[0]
+    assert precision_gap["gap"] == (
+        precision_gap["test"] - precision_gap["validation"]
+    )
+    report = (
+        phase_report_dir / "phase_4_7_frozen_threshold_test_evaluation.md"
+    ).read_text(encoding="utf-8")
+    normalized_report = " ".join(report.split()).lower()
+    assert "applied unchanged to the protected test split" in normalized_report
+    assert "no retuning" in normalized_report
+    assert "test threshold sweep" in report
+    assert "select a new threshold" in report
+    assert report == (
+        project_root / "reports/phase_4_7_frozen_threshold_test_evaluation.md"
     ).read_text(encoding="utf-8")

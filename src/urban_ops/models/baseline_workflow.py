@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Final, Sequence
 
@@ -69,6 +70,7 @@ from urban_ops.models.evaluation import (
     SWEEP_CLASSIFICATION_THRESHOLDS,
     CalibrationEvaluation,
     ClassificationMetrics,
+    EvaluationError,
     RankingEvaluation,
     ThresholdMetrics,
     ThresholdPolicyResult,
@@ -83,6 +85,7 @@ from urban_ops.models.evaluation import (
     evaluate_threshold_sweep,
     freeze_workload_limited_threshold,
     metrics_row,
+    validate_frozen_threshold_decision,
 )
 from urban_ops.utils.paths import PROJECT_ROOT
 
@@ -152,6 +155,8 @@ class BaselineWorkflowResult:
     logistic_validation_policy_results: pd.DataFrame
     frozen_threshold_decision: FrozenThresholdDecision
     frozen_threshold_decision_path: Path
+    logistic_test_frozen_threshold_result: pd.DataFrame
+    frozen_threshold_generalization_results: pd.DataFrame
     threshold_tradeoff_figure_paths: tuple[Path, ...]
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
@@ -858,6 +863,66 @@ def build_logistic_validation_policy_table(
     )
 
 
+def build_logistic_test_frozen_threshold_table(
+    metrics: ThresholdMetrics,
+    decision: FrozenThresholdDecision,
+) -> pd.DataFrame:
+    """Build the one-row Phase 4.7 frozen-threshold test table."""
+    validated = validate_frozen_threshold_decision(decision)
+    if metrics.threshold != validated.selected_threshold:
+        raise EvaluationError("test metrics must use the frozen threshold decision.")
+    return pd.DataFrame(
+        [
+            {
+                "model": "Logistic Regression",
+                "selection_split": validated.selected_on_split,
+                "evaluation_split": "test",
+                "policy_name": validated.policy_name,
+                "constraint_name": validated.constraint_name,
+                "constraint_value": validated.constraint_value,
+                "secondary_objective": validated.secondary_objective,
+                **metrics.to_dict(),
+            }
+        ]
+    )
+
+
+def build_frozen_threshold_generalization_table(
+    *,
+    decision: FrozenThresholdDecision,
+    test_metrics: ThresholdMetrics,
+) -> pd.DataFrame:
+    """Compare validation evidence with Phase 4.7 test operating behavior."""
+    validated = validate_frozen_threshold_decision(decision)
+    if test_metrics.threshold != validated.selected_threshold:
+        raise EvaluationError("test metrics must use the frozen threshold decision.")
+    rows: list[dict[str, object]] = []
+    for metric, validation_value, test_value in (
+        ("precision", validated.precision, test_metrics.precision),
+        ("recall", validated.recall, test_metrics.recall),
+        ("f1", validated.f1, test_metrics.f1),
+        (
+            "predicted_positive_rate",
+            validated.predicted_positive_rate,
+            test_metrics.predicted_positive_rate,
+        ),
+        ("actual_positive_rate", None, test_metrics.actual_positive_rate),
+    ):
+        rows.append(
+            {
+                "metric": metric,
+                "validation": validation_value,
+                "test": test_value,
+                "gap": (
+                    None
+                    if validation_value is None
+                    else float(test_value - validation_value)
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _phase_4_3_focus_region(results: pd.DataFrame) -> pd.DataFrame:
     """Return the 0.40-0.50 sweep rows used for transition reporting."""
     focus = results.loc[results["threshold"].between(0.40, 0.50)]
@@ -1204,13 +1269,63 @@ def load_frozen_threshold_decision(
     return FrozenThresholdDecision(**payload)
 
 
+def _verify_frozen_decision_matches_validation_candidate(
+    *,
+    loaded: FrozenThresholdDecision,
+    computed: FrozenThresholdDecision,
+) -> None:
+    """Verify the loaded Phase 4.6 artifact matches validation provenance."""
+    validate_frozen_threshold_decision(loaded)
+    validate_frozen_threshold_decision(computed)
+    for field in (
+        "policy_name",
+        "constraint_name",
+        "secondary_objective",
+        "selected_on_split",
+        "true_positives",
+        "false_positives",
+        "true_negatives",
+        "false_negatives",
+        "predicted_positive_count",
+        "frozen",
+    ):
+        if getattr(loaded, field) != getattr(computed, field):
+            raise EvaluationError(
+                "loaded frozen threshold decision does not match the Phase 4.5 "
+                f"validation workload-policy candidate for {field}."
+            )
+    for field in (
+        "constraint_value",
+        "selected_threshold",
+        "precision",
+        "recall",
+        "f1",
+        "predicted_positive_rate",
+    ):
+        if not math.isclose(
+            float(getattr(loaded, field)),
+            float(getattr(computed, field)),
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise EvaluationError(
+                "loaded frozen threshold decision does not match the Phase 4.5 "
+                f"validation workload-policy candidate for {field}."
+            )
+
+
 def _write_phase_4_6_outputs(
     decision: FrozenThresholdDecision,
     *,
     decision_path: Path = FROZEN_THRESHOLD_DECISION_PATH,
+    write_decision_artifact: bool = True,
 ) -> Path:
     """Write Phase 4.6's frozen threshold artifact and decision report."""
-    artifact_path = write_frozen_threshold_decision(decision, path=decision_path)
+    artifact_path = (
+        write_frozen_threshold_decision(decision, path=decision_path)
+        if write_decision_artifact
+        else decision_path
+    )
     BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     report_path = PROJECT_ROOT / "reports/phase_4_6_frozen_threshold_decision.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1269,6 +1384,81 @@ Machine-readable decision artifact:
     )
     report_path.write_text(report, encoding="utf-8")
     return artifact_path
+
+
+def _write_phase_4_7_outputs(
+    *,
+    test_result: pd.DataFrame,
+    generalization_results: pd.DataFrame,
+    decision: FrozenThresholdDecision,
+) -> tuple[Path, Path]:
+    """Write Phase 4.7's final frozen-threshold test artifacts."""
+    validate_frozen_threshold_decision(decision)
+    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = PROJECT_ROOT / "reports/phase_4_7_frozen_threshold_test_evaluation.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    test_filename = "logistic_regression_test_frozen_threshold.csv"
+    gap_filename = "logistic_regression_test_frozen_threshold_generalization_gaps.csv"
+    for directory in (TABLES_DIR, ROOT_TABLES_DIR):
+        test_result.to_csv(directory / test_filename, index=False)
+        generalization_results.to_csv(directory / gap_filename, index=False)
+
+    row = test_result.iloc[0]
+    report = f"""# Phase 4.7 — Frozen Threshold Test Evaluation
+
+Threshold `{decision.selected_threshold:.2f}` was selected on validation under
+the approved workload-limited policy and applied unchanged to the protected test
+split. This phase does not run a test threshold sweep, policy comparison,
+neighboring-threshold check, retuning step, or model improvement.
+
+## Frozen Policy Provenance
+
+- Policy: `{decision.policy_name}`
+- Constraint: `{decision.constraint_name} <= {decision.constraint_value:.2f}`
+- Secondary objective: `{decision.secondary_objective}`
+- Selected on split: `{decision.selected_on_split}`
+- Frozen: `{str(decision.frozen).lower()}`
+
+## Final Test Operating Point
+
+{_format_phase_4_7_test_table(test_result)}
+
+## Validation vs Test Generalization
+
+Gaps use `test - validation` consistently.
+
+{_format_phase_4_7_gap_table(generalization_results)}
+
+## Test Confusion Counts
+
+At threshold `{row['threshold']:.2f}`, the Logistic Regression baseline flags
+{int(row['predicted_positive_count']):,} of {int(row['sample_count']):,} test
+complaints ({row['predicted_positive_rate'] * 100:.1f}%). It correctly flags
+{int(row['true_positives']):,} actual missed-target complaints, creates
+{int(row['false_positives']):,} false alarms, correctly leaves
+{int(row['true_negatives']):,} on-time complaints unflagged, and misses
+{int(row['false_negatives']):,} actual missed-target complaints.
+
+## No Retuning
+
+The frozen threshold remains `{decision.selected_threshold:.2f}` after seeing
+test results. Test performance is final out-of-sample evidence only; it is not
+used to select a new threshold, choose a different policy, refit the model, or
+update `{FROZEN_THRESHOLD_DECISION_PATH.relative_to(PROJECT_ROOT)}`.
+
+Machine-readable artifacts:
+
+- `reports/tables/{test_filename}`
+- `reports/tables/{gap_filename}`
+"""
+    (BASELINE_REPORT_DIR / "phase_4_7_frozen_threshold_test_evaluation.md").write_text(
+        report,
+        encoding="utf-8",
+    )
+    report_path.write_text(report, encoding="utf-8")
+    return ROOT_TABLES_DIR / test_filename, ROOT_TABLES_DIR / gap_filename
 
 
 def _write_phase_4_3_outputs(results: pd.DataFrame) -> None:
@@ -1636,6 +1826,34 @@ def _format_phase_4_5_table(results: pd.DataFrame) -> str:
     return _dataframe_to_markdown(results.loc[:, columns].copy())
 
 
+def _format_phase_4_7_test_table(results: pd.DataFrame) -> str:
+    """Render the Phase 4.7 frozen-threshold final test operating point."""
+    columns = [
+        "model",
+        "selection_split",
+        "evaluation_split",
+        "threshold",
+        "precision",
+        "recall",
+        "f1",
+        "true_positives",
+        "false_positives",
+        "true_negatives",
+        "false_negatives",
+        "predicted_positive_count",
+        "predicted_positive_rate",
+        "sample_count",
+        "actual_positive_count",
+        "actual_positive_rate",
+    ]
+    return _dataframe_to_markdown(results.loc[:, columns].copy())
+
+
+def _format_phase_4_7_gap_table(results: pd.DataFrame) -> str:
+    """Render validation-to-test gaps for the frozen threshold."""
+    return _dataframe_to_markdown(results.loc[:, ["metric", "validation", "test", "gap"]].copy())
+
+
 def _format_confusion_matrices(results: pd.DataFrame) -> str:
     """Render readable predicted-by-actual confusion matrices for each model."""
     sections: list[str] = []
@@ -1695,6 +1913,8 @@ def _write_reports(
     logistic_validation_policy_results: pd.DataFrame,
     frozen_threshold_decision: FrozenThresholdDecision,
     frozen_threshold_decision_path: Path,
+    logistic_test_frozen_threshold_result: pd.DataFrame,
+    frozen_threshold_generalization_results: pd.DataFrame,
     threshold_tradeoff_figure_paths: tuple[Path, ...],
     selected_model_name: str,
     selected_threshold: float,
@@ -1882,6 +2102,24 @@ policy.
 
 Frozen threshold artifact: `{frozen_threshold_decision_path.relative_to(PROJECT_ROOT)}`
 Phase 4.6 report: `reports/phase_4_6_frozen_threshold_decision.md`
+
+## Phase 4.7 — Frozen Threshold Test Evaluation
+
+The Phase 4.6 threshold `{frozen_threshold_decision.selected_threshold:.2f}` is
+loaded from the frozen decision artifact and applied unchanged to the protected
+test split. The test set is not used for threshold search, policy selection,
+neighboring-threshold checks, retuning, or model updates.
+
+{_format_phase_4_7_test_table(logistic_test_frozen_threshold_result)}
+
+### Validation vs Test Generalization
+
+Gaps use `test - validation`.
+
+{_format_phase_4_7_gap_table(frozen_threshold_generalization_results)}
+
+Phase 4.7 report: `reports/phase_4_7_frozen_threshold_test_evaluation.md`
+Phase 4.7 data: `reports/tables/logistic_regression_test_frozen_threshold.csv`
 
 ## Baseline Selection
 
@@ -2262,8 +2500,34 @@ def run_baseline_workflow(
     logistic_validation_policy_results = build_logistic_validation_policy_table(
         evaluate_threshold_selection_policies(logistic_validation_sweep_results)
     )
-    frozen_threshold_decision = freeze_workload_limited_threshold(
+    computed_frozen_threshold_decision = freeze_workload_limited_threshold(
         logistic_validation_policy_results
+    )
+    frozen_threshold_decision = validate_frozen_threshold_decision(
+        load_frozen_threshold_decision()
+    )
+    _verify_frozen_decision_matches_validation_candidate(
+        loaded=frozen_threshold_decision,
+        computed=computed_frozen_threshold_decision,
+    )
+    logistic_model = model_objects["Logistic Regression"]
+    logistic_test_scores = logistic_model.predict_score(inputs.matrices["test"])
+    logistic_test_frozen_threshold_metrics = evaluate_threshold(
+        inputs.targets["test"],
+        logistic_test_scores,
+        threshold=frozen_threshold_decision.selected_threshold,
+    )
+    logistic_test_frozen_threshold_result = (
+        build_logistic_test_frozen_threshold_table(
+            logistic_test_frozen_threshold_metrics,
+            frozen_threshold_decision,
+        )
+    )
+    frozen_threshold_generalization_results = (
+        build_frozen_threshold_generalization_table(
+            decision=frozen_threshold_decision,
+            test_metrics=logistic_test_frozen_threshold_metrics,
+        )
     )
     selected_model_name = select_baseline(validation_results)
     _, validation_score, selected_threshold = _split_predictions(
@@ -2330,7 +2594,13 @@ def run_baseline_workflow(
     )
     _write_phase_4_5_outputs(logistic_validation_policy_results)
     frozen_threshold_decision_path = _write_phase_4_6_outputs(
-        frozen_threshold_decision
+        frozen_threshold_decision,
+        write_decision_artifact=False,
+    )
+    _write_phase_4_7_outputs(
+        test_result=logistic_test_frozen_threshold_result,
+        generalization_results=frozen_threshold_generalization_results,
+        decision=frozen_threshold_decision,
     )
     _write_ranking_figures(
         validation_results=validation_results,
@@ -2351,6 +2621,10 @@ def run_baseline_workflow(
         logistic_validation_policy_results=logistic_validation_policy_results,
         frozen_threshold_decision=frozen_threshold_decision,
         frozen_threshold_decision_path=frozen_threshold_decision_path,
+        logistic_test_frozen_threshold_result=logistic_test_frozen_threshold_result,
+        frozen_threshold_generalization_results=(
+            frozen_threshold_generalization_results
+        ),
         threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         selected_model_name=selected_model_name,
         selected_threshold=selected_threshold,
@@ -2370,6 +2644,10 @@ def run_baseline_workflow(
         logistic_validation_policy_results=logistic_validation_policy_results,
         frozen_threshold_decision=frozen_threshold_decision,
         frozen_threshold_decision_path=frozen_threshold_decision_path,
+        logistic_test_frozen_threshold_result=logistic_test_frozen_threshold_result,
+        frozen_threshold_generalization_results=(
+            frozen_threshold_generalization_results
+        ),
         threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,

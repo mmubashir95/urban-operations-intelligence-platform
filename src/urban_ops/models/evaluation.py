@@ -58,6 +58,7 @@ FROZEN_THRESHOLD_POLICY_NAME: Final = "max_flagged_rate"
 FROZEN_THRESHOLD_CONSTRAINT_NAME: Final = "predicted_positive_rate"
 FROZEN_THRESHOLD_SECONDARY_OBJECTIVE: Final = "maximize_recall"
 FROZEN_THRESHOLD_SELECTED_SPLIT: Final = "validation"
+FROZEN_THRESHOLD_SELECTED_THRESHOLD: Final = 0.49
 THRESHOLD_POLICY_REQUIRED_COLUMNS: Final = (
     "threshold",
     "sample_count",
@@ -993,6 +994,59 @@ def freeze_workload_limited_threshold(
         predicted_positive_rate=predicted_positive_rate,
         frozen=True,
     )
+
+
+def validate_frozen_threshold_decision(
+    decision: FrozenThresholdDecision,
+) -> FrozenThresholdDecision:
+    """Validate the authoritative Phase 4.6 threshold decision for reuse.
+
+    Later phases must apply the validation-selected threshold unchanged. This
+    check verifies the artifact is the approved workload-limited policy
+    decision and not an unfrozen, test-selected, or differently constrained
+    threshold.
+    """
+    if not isinstance(decision, FrozenThresholdDecision):
+        raise EvaluationError("frozen threshold decision has the wrong type.")
+    if not decision.frozen:
+        raise EvaluationError("frozen threshold decision must have frozen=true.")
+    if decision.policy_name != FROZEN_THRESHOLD_POLICY_NAME:
+        raise EvaluationError("frozen threshold policy name is not approved.")
+    if decision.constraint_name != FROZEN_THRESHOLD_CONSTRAINT_NAME:
+        raise EvaluationError("frozen threshold constraint name is not approved.")
+    if decision.constraint_value != THRESHOLD_POLICY_MAX_FLAGGED_RATE:
+        raise EvaluationError("frozen threshold workload constraint must equal 0.30.")
+    if decision.secondary_objective != FROZEN_THRESHOLD_SECONDARY_OBJECTIVE:
+        raise EvaluationError("frozen threshold secondary objective is not approved.")
+    if decision.selected_on_split != FROZEN_THRESHOLD_SELECTED_SPLIT:
+        raise EvaluationError("frozen threshold must be selected on validation.")
+    selected_threshold = _validate_threshold(decision.selected_threshold)
+    if selected_threshold != FROZEN_THRESHOLD_SELECTED_THRESHOLD:
+        raise EvaluationError("frozen threshold must equal the approved value 0.49.")
+    if decision.predicted_positive_rate > decision.constraint_value:
+        raise EvaluationError("frozen threshold violates the workload constraint.")
+    numeric_fields = (
+        "precision",
+        "recall",
+        "f1",
+        "predicted_positive_rate",
+    )
+    for field in numeric_fields:
+        value = float(getattr(decision, field))
+        if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise EvaluationError(f"frozen threshold decision has invalid {field}.")
+    count_fields = (
+        "true_positives",
+        "false_positives",
+        "true_negatives",
+        "false_negatives",
+        "predicted_positive_count",
+    )
+    for field in count_fields:
+        value = getattr(decision, field)
+        if not isinstance(value, int) or value < 0:
+            raise EvaluationError(f"frozen threshold decision has invalid {field}.")
+    return decision
 
 
 def top_k_metrics(

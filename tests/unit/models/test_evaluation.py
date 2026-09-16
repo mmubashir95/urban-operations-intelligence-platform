@@ -18,6 +18,7 @@ from urban_ops.models.evaluation import (
     THRESHOLD_POLICY_MIN_RECALL,
     THRESHOLD_POLICY_TIE_BREAK,
     FROZEN_THRESHOLD_POLICY_NAME,
+    FROZEN_THRESHOLD_SELECTED_THRESHOLD,
     FROZEN_THRESHOLD_SECONDARY_OBJECTIVE,
     BasicClassificationMetrics,
     CalibrationEvaluation,
@@ -43,6 +44,7 @@ from urban_ops.models.evaluation import (
     select_with_min_precision_policy,
     select_with_min_recall_policy,
     top_k_metrics,
+    validate_frozen_threshold_decision,
 )
 
 
@@ -54,6 +56,16 @@ def test_threshold_conversion_includes_score_equal_to_threshold() -> None:
     )
 
     np.testing.assert_array_equal(predictions, [0, 0, 1, 1])
+
+
+def test_frozen_threshold_conversion_includes_score_equal_to_049() -> None:
+    """Phase 4.7 applies the loaded 0.49 threshold with the Phase 4.1 rule."""
+    predictions = classify_scores_at_threshold(
+        [0.48, FROZEN_THRESHOLD_SELECTED_THRESHOLD, 0.50],
+        threshold=FROZEN_THRESHOLD_SELECTED_THRESHOLD,
+    )
+
+    np.testing.assert_array_equal(predictions, [0, 1, 1])
 
 
 def test_threshold_evaluation_matches_hand_calculated_operating_point() -> None:
@@ -517,6 +529,65 @@ def test_freeze_workload_limited_threshold_is_deterministic_and_serializable() -
     serialized = first.to_dict()
     assert set(serialized) == set(FrozenThresholdDecision.__dataclass_fields__)
     assert FrozenThresholdDecision(**serialized) == first
+
+
+def _approved_frozen_decision() -> FrozenThresholdDecision:
+    """Return a Phase 4.7-valid frozen threshold decision fixture."""
+    return FrozenThresholdDecision(
+        policy_name=FROZEN_THRESHOLD_POLICY_NAME,
+        policy_description=(
+            "Approved workload-limited policy: keep predicted_positive_rate "
+            "<= 0.30, then maximize recall on validation."
+        ),
+        constraint_name="predicted_positive_rate",
+        constraint_value=0.30,
+        secondary_objective=FROZEN_THRESHOLD_SECONDARY_OBJECTIVE,
+        selected_threshold=FROZEN_THRESHOLD_SELECTED_THRESHOLD,
+        selected_on_split="validation",
+        precision=0.5039106145251396,
+        recall=0.3129770992366412,
+        f1=0.3861301369863014,
+        true_positives=902,
+        false_positives=888,
+        true_negatives=2992,
+        false_negatives=1980,
+        predicted_positive_count=1790,
+        predicted_positive_rate=0.2647145814847678,
+        frozen=True,
+    )
+
+
+def test_validate_frozen_threshold_decision_accepts_authoritative_contract() -> None:
+    """Phase 4.7 can only use the approved validation-selected decision."""
+    decision = _approved_frozen_decision()
+
+    assert validate_frozen_threshold_decision(decision) == decision
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"frozen": False}, "frozen=true"),
+        ({"selected_on_split": "test"}, "selected on validation"),
+        ({"selected_threshold": 0.50}, "0.49"),
+        ({"selected_threshold": float("nan")}, "threshold"),
+        ({"policy_name": "Max F1"}, "policy name"),
+        ({"constraint_name": "minimum_precision"}, "constraint name"),
+        ({"constraint_value": 0.20}, "0.30"),
+        ({"secondary_objective": "maximize_precision"}, "secondary objective"),
+        ({"predicted_positive_rate": 0.31}, "workload constraint"),
+    ],
+)
+def test_validate_frozen_threshold_decision_rejects_invalid_artifacts(
+    updates: dict[str, object],
+    message: str,
+) -> None:
+    """Invalid Phase 4.6 artifacts fail before the test split can be scored."""
+    payload = _approved_frozen_decision().to_dict()
+    payload.update(updates)
+
+    with pytest.raises(EvaluationError, match=message):
+        validate_frozen_threshold_decision(FrozenThresholdDecision(**payload))
 
 
 @pytest.mark.parametrize(
