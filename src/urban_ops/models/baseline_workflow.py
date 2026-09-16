@@ -142,6 +142,7 @@ class BaselineWorkflowResult:
     logistic_validation_threshold_result: pd.DataFrame
     logistic_validation_manual_threshold_results: pd.DataFrame
     logistic_validation_sweep_results: pd.DataFrame
+    threshold_tradeoff_figure_paths: tuple[Path, ...]
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
     selected_model_name: str
@@ -885,6 +886,206 @@ def _format_phase_4_3_transition_summary(results: pd.DataFrame) -> str:
     )
 
 
+def _threshold_sweep_plot_data(results: pd.DataFrame) -> pd.DataFrame:
+    """Return Phase 4.3 rows in deterministic threshold order for plotting."""
+    ordered = results.sort_values("threshold", kind="mergesort").reset_index(drop=True)
+    if not ordered["threshold"].is_monotonic_increasing:
+        raise RuntimeError("Threshold sweep rows must be ordered by threshold.")
+    if len(ordered) != len(results):
+        raise RuntimeError("Threshold sweep plotting lost one or more rows.")
+    return ordered
+
+
+def _phase_4_4_figure_paths() -> tuple[Path, ...]:
+    """Return deterministic Phase 4.4 figure artifact paths."""
+    filenames = (
+        "logistic_regression_validation_threshold_precision_recall_f1.png",
+        "logistic_regression_validation_threshold_flagged_rate.png",
+        "logistic_regression_validation_threshold_classification_counts.png",
+    )
+    return tuple(ROOT_FIGURES_DIR / filename for filename in filenames)
+
+
+def _write_threshold_tradeoff_figures(results: pd.DataFrame) -> tuple[Path, ...]:
+    """Plot Phase 4.4 threshold trade-offs from existing sweep rows only."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    data = _threshold_sweep_plot_data(results)
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
+    metric_figure, metric_axis = plt.subplots(figsize=(8, 5), dpi=150)
+    metric_axis.plot(data["threshold"], data["precision"], label="Precision")
+    metric_axis.plot(data["threshold"], data["recall"], label="Recall")
+    metric_axis.plot(data["threshold"], data["f1"], label="F1")
+    metric_axis.set_xlabel("Classification threshold")
+    metric_axis.set_ylabel("Metric value")
+    metric_axis.set_title("Threshold vs Precision, Recall, and F1")
+    metric_axis.set_xlim(0, 1)
+    metric_axis.set_ylim(0, 1)
+    metric_axis.legend()
+    metric_figure.tight_layout()
+
+    workload_figure, workload_axis = plt.subplots(figsize=(8, 5), dpi=150)
+    workload_axis.plot(
+        data["threshold"],
+        data["predicted_positive_rate"],
+        color="C3",
+        label="Predicted-positive rate",
+    )
+    workload_axis.set_xlabel("Classification threshold")
+    workload_axis.set_ylabel("Predicted-positive rate")
+    workload_axis.set_title("Threshold vs Predicted-Positive Rate")
+    workload_axis.set_xlim(0, 1)
+    workload_axis.set_ylim(0, 1)
+    workload_axis.legend()
+    workload_figure.tight_layout()
+
+    counts_figure, counts_axis = plt.subplots(figsize=(8, 5), dpi=150)
+    counts_axis.plot(
+        data["threshold"], data["true_positives"], label="True positives"
+    )
+    counts_axis.plot(
+        data["threshold"], data["false_positives"], label="False positives"
+    )
+    counts_axis.plot(
+        data["threshold"], data["false_negatives"], label="False negatives"
+    )
+    counts_axis.set_xlabel("Classification threshold")
+    counts_axis.set_ylabel("Complaint count")
+    counts_axis.set_title("Threshold vs Classification Counts")
+    counts_axis.set_xlim(0, 1)
+    counts_axis.legend()
+    counts_figure.tight_layout()
+
+    figure_artifacts = (
+        (
+            metric_figure,
+            "logistic_regression_validation_threshold_precision_recall_f1.png",
+        ),
+        (
+            workload_figure,
+            "logistic_regression_validation_threshold_flagged_rate.png",
+        ),
+        (
+            counts_figure,
+            "logistic_regression_validation_threshold_classification_counts.png",
+        ),
+    )
+    for directory in (FIGURES_DIR, ROOT_FIGURES_DIR):
+        for figure, filename in figure_artifacts:
+            figure.savefig(directory / filename)
+    for figure, _ in figure_artifacts:
+        plt.close(figure)
+    return _phase_4_4_figure_paths()
+
+
+def _largest_step_change(
+    results: pd.DataFrame, column: str
+) -> tuple[pd.Series, pd.Series, float]:
+    """Return adjacent rows around the largest absolute one-step column change."""
+    data = _threshold_sweep_plot_data(results)
+    changes = data[column].diff().iloc[1:]
+    largest_index = int(changes.abs().idxmax())
+    before = data.iloc[largest_index - 1]
+    after = data.iloc[largest_index]
+    return before, after, float(after[column] - before[column])
+
+
+def _format_phase_4_4_sensitivity_summary(results: pd.DataFrame) -> str:
+    """Describe Phase 4.4 threshold trade-offs using actual sweep values."""
+    data = _threshold_sweep_plot_data(results)
+    first = data.iloc[0]
+    last = data.iloc[-1]
+    workload_before, workload_after, workload_delta = _largest_step_change(
+        data, "predicted_positive_count"
+    )
+    recall_before, recall_after, recall_delta = _largest_step_change(data, "recall")
+    fn_before, fn_after, fn_delta = _largest_step_change(data, "false_negatives")
+    fp_before, fp_after, fp_delta = _largest_step_change(data, "false_positives")
+    precision_min = float(data["precision"].min())
+    precision_max = float(data["precision"].max())
+    f1_min = float(data["f1"].min())
+    f1_max = float(data["f1"].max())
+    return (
+        f"Across the full sweep from {first['threshold']:.2f} to "
+        f"{last['threshold']:.2f}, flagged complaints move from "
+        f"{int(first['predicted_positive_count']):,} "
+        f"({first['predicted_positive_rate'] * 100:.1f}%) to "
+        f"{int(last['predicted_positive_count']):,} "
+        f"({last['predicted_positive_rate'] * 100:.1f}%). Recall moves from "
+        f"{first['recall']:.4f} to {last['recall']:.4f}, true positives from "
+        f"{int(first['true_positives']):,} to {int(last['true_positives']):,}, "
+        f"false positives from {int(first['false_positives']):,} to "
+        f"{int(last['false_positives']):,}, and false negatives from "
+        f"{int(first['false_negatives']):,} to "
+        f"{int(last['false_negatives']):,}. Precision ranges from "
+        f"{precision_min:.4f} to {precision_max:.4f}; F1 ranges from "
+        f"{f1_min:.4f} to {f1_max:.4f}. The largest one-step workload change "
+        f"occurs between {workload_before['threshold']:.2f} and "
+        f"{workload_after['threshold']:.2f}, where flagged complaints change by "
+        f"{int(workload_delta):+,}. The largest one-step recall change occurs "
+        f"between {recall_before['threshold']:.2f} and "
+        f"{recall_after['threshold']:.2f} ({recall_delta:+.4f}). False "
+        f"negatives rise most sharply between {fn_before['threshold']:.2f} and "
+        f"{fn_after['threshold']:.2f} ({int(fn_delta):+,}), while false "
+        f"positives fall most sharply between {fp_before['threshold']:.2f} and "
+        f"{fp_after['threshold']:.2f} ({int(fp_delta):+,}). These are "
+        "threshold-sensitive regions, not selected or recommended thresholds."
+    )
+
+
+def _write_phase_4_4_outputs(results: pd.DataFrame) -> tuple[Path, ...]:
+    """Write Phase 4.4's threshold trade-off figures and report."""
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = PROJECT_ROOT / "reports/phase_4_4_threshold_tradeoffs.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    figure_paths = _write_threshold_tradeoff_figures(results)
+    report = f"""# Phase 4.4 — Threshold Trade-Off Visualizations
+
+Phase 4.4 visualizes the existing Phase 4.3 Logistic Regression validation
+threshold sweep. It does not fit a model, regenerate probabilities, recompute
+threshold metrics independently, score the protected test set, rank thresholds,
+or select an operating point.
+
+Threshold movement does not change model coefficients, probability scores,
+score ordering, ROC-AUC, or PR-AUC. It does change hard predictions,
+TP/FP/TN/FN, precision, recall, F1, and predicted-positive workload.
+
+## Figures
+
+- Precision / Recall / F1 vs Threshold:
+  `reports/figures/{figure_paths[0].name}`
+- Predicted-Positive Rate vs Threshold:
+  `reports/figures/{figure_paths[1].name}`
+- Classification Counts vs Threshold:
+  `reports/figures/{figure_paths[2].name}`
+
+## Threshold Sensitivity
+
+{_format_phase_4_4_sensitivity_summary(results)}
+
+The flagged-rate plot is the workload view: it shows the share of validation
+complaints that would be sent for attention at each hard-classification
+threshold. The classification-count plot shows the operational trade-off behind
+recall: as fewer complaints are flagged, true positives and false positives
+fall, while missed actual positives become false negatives. The figures make
+threshold-sensitive regions visible, but they do not decide which threshold
+should be used.
+
+Full sweep data: `reports/tables/logistic_regression_validation_threshold_sweep.csv`
+"""
+    (BASELINE_REPORT_DIR / "phase_4_4_threshold_tradeoffs.md").write_text(
+        report,
+        encoding="utf-8",
+    )
+    report_path.write_text(report, encoding="utf-8")
+    return figure_paths
+
+
 def _write_phase_4_3_outputs(results: pd.DataFrame) -> None:
     """Write Phase 4.3's deterministic validation-only threshold sweep."""
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
@@ -1283,6 +1484,7 @@ def _write_reports(
     logistic_validation_threshold_result: pd.DataFrame,
     logistic_validation_manual_threshold_results: pd.DataFrame,
     logistic_validation_sweep_results: pd.DataFrame,
+    threshold_tradeoff_figure_paths: tuple[Path, ...],
     selected_model_name: str,
     selected_threshold: float,
     artifact_path: Path,
@@ -1414,6 +1616,22 @@ is ranked, optimized, recommended, or selected.
 
 Full sweep data: `reports/tables/logistic_regression_validation_threshold_sweep.csv`
 Phase 4.3 report: `reports/phase_4_3_threshold_sweep.md`
+
+## Phase 4.4 — Threshold Trade-Off Visualizations
+
+The Phase 4.3 sweep rows are visualized directly. No model fitting, probability
+generation, threshold recomputation, threshold ranking, threshold optimization,
+or test-set threshold evaluation occurs in this visualization layer.
+
+Figures:
+
+- `reports/figures/{threshold_tradeoff_figure_paths[0].name}`
+- `reports/figures/{threshold_tradeoff_figure_paths[1].name}`
+- `reports/figures/{threshold_tradeoff_figure_paths[2].name}`
+
+{_format_phase_4_4_sensitivity_summary(logistic_validation_sweep_results)}
+
+Phase 4.4 report: `reports/phase_4_4_threshold_tradeoffs.md`
 
 ## Baseline Selection
 
@@ -1851,6 +2069,9 @@ def run_baseline_workflow(
     _write_phase_4_1_outputs(logistic_validation_threshold_result)
     _write_phase_4_2_outputs(logistic_validation_manual_threshold_results)
     _write_phase_4_3_outputs(logistic_validation_sweep_results)
+    threshold_tradeoff_figure_paths = _write_phase_4_4_outputs(
+        logistic_validation_sweep_results
+    )
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -1867,6 +2088,7 @@ def run_baseline_workflow(
             logistic_validation_manual_threshold_results
         ),
         logistic_validation_sweep_results=logistic_validation_sweep_results,
+        threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         selected_model_name=selected_model_name,
         selected_threshold=selected_threshold,
         artifact_path=artifact_path,
@@ -1882,6 +2104,7 @@ def run_baseline_workflow(
             logistic_validation_manual_threshold_results
         ),
         logistic_validation_sweep_results=logistic_validation_sweep_results,
+        threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,
         selected_model_name=selected_model_name,

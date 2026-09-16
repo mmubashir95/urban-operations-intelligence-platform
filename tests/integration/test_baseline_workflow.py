@@ -9,10 +9,14 @@ from urban_ops.models.baseline_workflow import (
     _format_confusion_matrices,
     _format_phase_4_3_focus_table,
     _format_phase_4_3_transition_summary,
+    _format_phase_4_4_sensitivity_summary,
     _phase_4_3_focus_region,
+    _threshold_sweep_plot_data,
+    _write_phase_4_4_outputs,
     _write_phase_4_1_outputs,
     _write_phase_4_2_outputs,
     _write_phase_4_3_outputs,
+    _write_threshold_tradeoff_figures,
     _write_ranking_figures,
     _write_validation_calibration_figure,
     build_logistic_validation_threshold_table,
@@ -497,3 +501,104 @@ def test_phase_4_3_focus_region_and_transition_summary_use_actual_sweep_values()
     summary = _format_phase_4_3_transition_summary(results)
     assert "From threshold 0.40 to 0.50" in summary
     assert "ROC-AUC and PR-AUC are unaffected" in summary
+
+
+def test_phase_4_4_plot_data_uses_all_sweep_fields_in_threshold_order() -> None:
+    """Plot inputs come directly from the Phase 4.3 sweep table."""
+    metrics = evaluate_threshold_sweep(
+        [1, 0, 1, 0, 1],
+        [0.80, 0.65, 0.45, 0.35, 0.25],
+        thresholds=(0.30, 0.40, 0.50, 0.60, 0.70),
+    )
+    results = build_logistic_validation_sweep_table(metrics)
+
+    plot_data = _threshold_sweep_plot_data(results)
+
+    assert plot_data["threshold"].tolist() == [0.30, 0.40, 0.50, 0.60, 0.70]
+    assert plot_data["precision"].tolist() == results["precision"].tolist()
+    assert plot_data["recall"].tolist() == results["recall"].tolist()
+    assert plot_data["f1"].tolist() == results["f1"].tolist()
+    assert plot_data["predicted_positive_rate"].tolist() == (
+        results["predicted_positive_rate"].tolist()
+    )
+    assert plot_data["true_positives"].tolist() == results["true_positives"].tolist()
+    assert plot_data["false_positives"].tolist() == results["false_positives"].tolist()
+    assert plot_data["false_negatives"].tolist() == results["false_negatives"].tolist()
+    assert len(plot_data) == len(results)
+
+
+def test_phase_4_4_figures_are_deterministic_and_reported(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Phase 4.4 writes three fixed figure artifacts and one report."""
+    metrics = evaluate_threshold_sweep(
+        [1, 0, 1, 0, 1, 0, 1, 0],
+        [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90],
+    )
+    results = build_logistic_validation_sweep_table(metrics)
+    phase_report_dir = tmp_path / "phase"
+    phase_figures = phase_report_dir / "figures"
+    root_figures = tmp_path / "root_figures"
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        phase_report_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.FIGURES_DIR",
+        phase_figures,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_FIGURES_DIR",
+        root_figures,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+
+    figure_paths = _write_phase_4_4_outputs(results)
+
+    filenames = [
+        "logistic_regression_validation_threshold_precision_recall_f1.png",
+        "logistic_regression_validation_threshold_flagged_rate.png",
+        "logistic_regression_validation_threshold_classification_counts.png",
+    ]
+    assert [path.name for path in figure_paths] == filenames
+    for directory in (phase_figures, root_figures):
+        for filename in filenames:
+            assert (directory / filename).stat().st_size > 0
+    report = (phase_report_dir / "phase_4_4_threshold_tradeoffs.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Phase 4.3 Logistic Regression validation" in report
+    assert "threshold sweep" in report
+    assert "does not fit a model" in report
+    assert "threshold-sensitive regions" in report
+    for filename in filenames:
+        assert f"reports/figures/{filename}" in report
+    assert report == (
+        project_root / "reports/phase_4_4_threshold_tradeoffs.md"
+    ).read_text(encoding="utf-8")
+
+    repeated_paths = _write_threshold_tradeoff_figures(results)
+    assert [path.name for path in repeated_paths] == filenames
+
+
+def test_phase_4_4_sensitivity_summary_uses_actual_sweep_values() -> None:
+    """Sensitivity prose reports observed changes without selecting a threshold."""
+    metrics = evaluate_threshold_sweep(
+        [1, 0, 1, 0, 1, 0, 1, 0],
+        [0.10, 0.20, 0.42, 0.44, 0.46, 0.48, 0.80, 0.90],
+    )
+    results = build_logistic_validation_sweep_table(metrics)
+
+    summary = _format_phase_4_4_sensitivity_summary(results)
+
+    assert "Across the full sweep from 0.05 to 0.95" in summary
+    assert "flagged complaints move from" in summary
+    assert "largest one-step workload change" in summary
+    assert "False negatives rise most sharply" in summary
+    assert "false positives fall most sharply" in summary
+    assert "not selected or recommended thresholds" in summary
