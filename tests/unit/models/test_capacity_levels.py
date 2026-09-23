@@ -6,6 +6,7 @@ import pytest
 
 from urban_ops.models.evaluation import (
     TOP_K_CAPACITIES,
+    TOP_K_FRACTIONS,
     CapacityLevel,
     EvaluationError,
     get_standard_capacity_levels,
@@ -15,6 +16,7 @@ from urban_ops.models.evaluation import (
 def test_standard_capacities_are_canonical_and_ordered() -> None:
     """Phase 5 uses exactly 5%, 10%, and 20% in report order."""
     assert TOP_K_CAPACITIES == (0.05, 0.10, 0.20)
+    assert TOP_K_FRACTIONS is TOP_K_CAPACITIES
 
 
 @pytest.mark.parametrize(
