@@ -1098,7 +1098,9 @@ def capacity_to_k(n_samples: object, capacity: object) -> int:
 
     Capacity must be in ``(0, 1]`` and means the fraction of highest-risk
     observations that operations can review, not a score cutoff. The exact
-    count uses ``ceil(n_samples * capacity)`` deterministically.
+    count uses ``ceil(n_samples * capacity)`` deterministically. Capacity is
+    evaluated as a Python float, so pass float64 values: a float32 ``0.1`` is
+    slightly above one tenth and can round ``K`` up by one row.
     """
     if (
         isinstance(n_samples, (bool, np.bool_))
@@ -1129,6 +1131,11 @@ def select_top_k(
     A capacity of 0.10 selects the highest-risk 10% after converting capacity
     with :func:`capacity_to_k`; it does not mean ``y_score >= 0.10``. Selection
     uses rank only and is independent of the frozen classification threshold.
+
+    ``ranked_records`` must follow the :func:`rank_by_risk` contract: contiguous
+    one-based ranks, unique original positions, non-increasing scores, and
+    equal scores in ascending original position. Anything else is rejected so
+    a malformed ranking cannot silently produce the wrong top-K slice.
     """
     try:
         records = tuple(ranked_records)
@@ -1141,6 +1148,17 @@ def select_top_k(
     expected_ranks = tuple(range(1, len(records) + 1))
     if tuple(record.rank for record in records) != expected_ranks:
         raise EvaluationError("ranked_records must be ordered by contiguous rank.")
+    positions = [record.original_position for record in records]
+    if len(set(positions)) != len(positions):
+        raise EvaluationError("ranked_records must not repeat original_position.")
+    for previous, current in zip(records, records[1:]):
+        if current.y_score > previous.y_score or (
+            current.y_score == previous.y_score
+            and current.original_position < previous.original_position
+        ):
+            raise EvaluationError(
+                "ranked_records must be ordered by descending risk with stable ties."
+            )
 
     selected_count = capacity_to_k(len(records), capacity)
     return records[:selected_count]

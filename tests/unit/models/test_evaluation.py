@@ -125,6 +125,10 @@ def test_top_k_selection_does_not_use_a_probability_threshold() -> None:
         ([0, 1], [0.5, float("nan")], "finite"),
         ([0, 1], [0.5, float("inf")], "finite"),
         ([0, 1], [0.5, float("-inf")], "finite"),
+        ([0, None], [0.5, 0.6], "null"),
+        ([0, 2], [0.5, 0.6], "0/1"),
+        ([0, 1], [0.5, 1.2], r"\[0, 1\]"),
+        ([0, 1], [-0.1, 0.6], r"\[0, 1\]"),
     ],
 )
 def test_rank_by_risk_rejects_invalid_inputs(y_true, y_score, message: str) -> None:
@@ -144,6 +148,14 @@ def test_rank_by_risk_rejects_invalid_inputs(y_true, y_score, message: str) -> N
         (10, 1.01, "interval"),
         (10, float("nan"), "interval"),
         (10, float("inf"), "interval"),
+        (10, float("-inf"), "interval"),
+        (10, True, "interval"),
+        (10, np.bool_(True), "interval"),
+        (10, None, "interval"),
+        (10, "high", "interval"),
+        (True, 0.10, "positive integer"),
+        (np.bool_(True), 0.10, "positive integer"),
+        (10.0, 0.10, "positive integer"),
     ],
 )
 def test_capacity_to_k_rejects_invalid_inputs(
@@ -167,6 +179,67 @@ def test_select_top_k_rejects_empty_or_malformed_rankings() -> None:
             [RankedRiskRecord(2, 0, 1, 0.9)],
             capacity=0.10,
         )
+
+
+def test_capacity_to_k_accepts_numpy_integer_sample_counts() -> None:
+    """NumPy integer counts follow the same ceiling rule as Python integers."""
+    assert capacity_to_k(np.int64(100), 0.10) == 10
+    assert capacity_to_k(np.int32(11), np.float64(0.10)) == 2
+
+
+def test_ranked_risk_record_is_immutable() -> None:
+    """Ranked records cannot be edited after ranking."""
+    record = rank_by_risk([1], [0.9])[0]
+
+    with pytest.raises(AttributeError):
+        record.rank = 2  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("records", "message"),
+    [
+        (
+            [RankedRiskRecord(1, 0, 1, 0.9), RankedRiskRecord(1, 1, 0, 0.5)],
+            "contiguous rank",
+        ),
+        (
+            [RankedRiskRecord(1, 0, 1, 0.9), RankedRiskRecord(3, 1, 0, 0.5)],
+            "contiguous rank",
+        ),
+        (
+            [RankedRiskRecord(2, 1, 0, 0.5), RankedRiskRecord(1, 0, 1, 0.9)],
+            "contiguous rank",
+        ),
+        (
+            [RankedRiskRecord(1, 0, 0, 0.1), RankedRiskRecord(2, 1, 1, 0.9)],
+            "descending risk",
+        ),
+        (
+            [RankedRiskRecord(1, 1, 0, 0.8), RankedRiskRecord(2, 0, 1, 0.8)],
+            "stable ties",
+        ),
+        (
+            [RankedRiskRecord(1, 0, 1, 0.9), RankedRiskRecord(2, 0, 1, 0.8)],
+            "original_position",
+        ),
+    ],
+)
+def test_select_top_k_rejects_rankings_that_break_the_rank_contract(
+    records: list[RankedRiskRecord],
+    message: str,
+) -> None:
+    """Hand-built rankings cannot silently yield a wrong top-K slice."""
+    with pytest.raises(EvaluationError, match=message):
+        select_top_k(records, capacity=0.50)
+
+
+def test_select_top_k_accepts_rankings_with_tied_scores() -> None:
+    """Stable ties produced by rank_by_risk satisfy the selection contract."""
+    ranked = rank_by_risk([0, 1, 1, 0], [0.80, 0.80, 0.80, 0.10])
+
+    selected = select_top_k(ranked, capacity=0.50)
+
+    assert [record.original_position for record in selected] == [0, 1]
 
 
 def test_threshold_conversion_includes_score_equal_to_threshold() -> None:
