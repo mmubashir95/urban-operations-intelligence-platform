@@ -24,10 +24,12 @@ from urban_ops.models.evaluation import (
     CalibrationEvaluation,
     EvaluationError,
     FrozenThresholdDecision,
+    RankedRiskRecord,
     RankingEvaluation,
     ThresholdPolicyResult,
     ThresholdMetrics,
     build_calibration_table,
+    capacity_to_k,
     classify_scores_at_threshold,
     evaluate_basic_classifier,
     evaluate_binary_classifier,
@@ -39,13 +41,132 @@ from urban_ops.models.evaluation import (
     evaluate_threshold_sweep,
     freeze_workload_limited_threshold,
     metrics_row,
+    rank_by_risk,
     select_max_f1_policy,
     select_with_max_flagged_rate_policy,
     select_with_min_precision_policy,
     select_with_min_recall_policy,
+    select_top_k,
     top_k_metrics,
     validate_frozen_threshold_decision,
 )
+
+
+def test_rank_by_risk_orders_scores_and_retains_source_fields() -> None:
+    """Ranking descends by risk while retaining labels and input positions."""
+    ranked = rank_by_risk(
+        [0, 1, 0, 1, 1],
+        [0.20, 0.90, 0.40, 0.70, 0.60],
+    )
+
+    assert [record.rank for record in ranked] == [1, 2, 3, 4, 5]
+    assert [record.original_position for record in ranked] == [1, 3, 4, 2, 0]
+    assert [record.y_true for record in ranked] == [1, 1, 1, 0, 0]
+    assert [record.y_score for record in ranked] == [0.90, 0.70, 0.60, 0.40, 0.20]
+
+
+def test_rank_by_risk_preserves_input_order_for_equal_scores() -> None:
+    """Stable score ties use original input position deterministically."""
+    first = rank_by_risk([0, 1, 1], [0.80, 0.80, 0.70])
+    repeated = rank_by_risk([0, 1, 1], [0.80, 0.80, 0.70])
+
+    assert first == repeated
+    assert [record.original_position for record in first] == [0, 1, 2]
+
+
+@pytest.mark.parametrize(
+    ("n_samples", "capacity", "expected_k"),
+    [
+        (100, 0.05, 5),
+        (100, 0.10, 10),
+        (100, 0.20, 20),
+        (11, 0.10, 2),
+        (5_499, 0.10, 550),
+    ],
+)
+def test_capacity_to_k_uses_ceiling(
+    n_samples: int,
+    capacity: float,
+    expected_k: int,
+) -> None:
+    """Operational fractions deterministically round upward to whole rows."""
+    assert capacity_to_k(n_samples, capacity) == expected_k
+
+
+def test_select_top_k_returns_exactly_first_k_ranked_records() -> None:
+    """Selection is a rank prefix and never a probability cutoff."""
+    ranked = rank_by_risk(
+        [0, 1, 0, 1, 1],
+        [0.20, 0.90, 0.40, 0.70, 0.60],
+    )
+
+    selected = select_top_k(ranked, capacity=0.40)
+
+    assert len(selected) == capacity_to_k(len(ranked), 0.40) == 2
+    assert selected == ranked[:2]
+    assert [record.original_position for record in selected] == [1, 3]
+
+
+def test_top_k_selection_does_not_use_a_probability_threshold() -> None:
+    """Low absolute scores can be selected because membership uses rank only."""
+    ranked = rank_by_risk([1, 0, 1], [0.20, 0.10, 0.05])
+
+    selected = select_top_k(ranked, capacity=0.34)
+
+    assert [record.y_score for record in selected] == [0.20, 0.10]
+    assert all(record.y_score < FROZEN_THRESHOLD_SELECTED_THRESHOLD for record in selected)
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_score", "message"),
+    [
+        ([], [], "must not be empty"),
+        ([0, 1], [0.5], "lengths must match"),
+        ([0, 1], [0.5, float("nan")], "finite"),
+        ([0, 1], [0.5, float("inf")], "finite"),
+        ([0, 1], [0.5, float("-inf")], "finite"),
+    ],
+)
+def test_rank_by_risk_rejects_invalid_inputs(y_true, y_score, message: str) -> None:
+    """Malformed foundational ranking inputs fail with evaluation errors."""
+    with pytest.raises(EvaluationError, match=message):
+        rank_by_risk(y_true, y_score)
+
+
+@pytest.mark.parametrize(
+    ("n_samples", "capacity", "message"),
+    [
+        (0, 0.10, "positive integer"),
+        (-1, 0.10, "positive integer"),
+        (1.5, 0.10, "positive integer"),
+        (10, 0.0, "interval"),
+        (10, -0.1, "interval"),
+        (10, 1.01, "interval"),
+        (10, float("nan"), "interval"),
+        (10, float("inf"), "interval"),
+    ],
+)
+def test_capacity_to_k_rejects_invalid_inputs(
+    n_samples,
+    capacity,
+    message: str,
+) -> None:
+    """Invalid counts and operational fractions fail clearly."""
+    with pytest.raises(EvaluationError, match=message):
+        capacity_to_k(n_samples, capacity)
+
+
+def test_select_top_k_rejects_empty_or_malformed_rankings() -> None:
+    """Selection requires nonempty, correctly ordered ranked records."""
+    with pytest.raises(EvaluationError, match="must not be empty"):
+        select_top_k([], capacity=0.10)
+    with pytest.raises(EvaluationError, match="RankedRiskRecord"):
+        select_top_k([{"rank": 1}], capacity=0.10)
+    with pytest.raises(EvaluationError, match="contiguous rank"):
+        select_top_k(
+            [RankedRiskRecord(2, 0, 1, 0.9)],
+            capacity=0.10,
+        )
 
 
 def test_threshold_conversion_includes_score_equal_to_threshold() -> None:

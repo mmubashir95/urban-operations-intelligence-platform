@@ -81,6 +81,25 @@ class EvaluationError(ValueError):
 
 
 @dataclass(frozen=True)
+class RankedRiskRecord:
+    """One complaint's position in a deterministic descending-risk ranking.
+
+    ``original_position`` is the zero-based position in the supplied inputs.
+    Equal scores retain that input order. ``rank`` is one-based so selecting
+    the first ``K`` records is equivalent to selecting records with rank <= K.
+    """
+
+    rank: int
+    original_position: int
+    y_true: int
+    y_score: float
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a flat JSON-safe ranked-record mapping."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class TopKMetrics:
     """Precision and recall for a deterministic highest-risk slice."""
 
@@ -1047,6 +1066,84 @@ def validate_frozen_threshold_decision(
         if not isinstance(value, int) or value < 0:
             raise EvaluationError(f"frozen threshold decision has invalid {field}.")
     return decision
+
+
+def rank_by_risk(y_true: object, y_score: object) -> tuple[RankedRiskRecord, ...]:
+    """Order complaints from highest to lowest predicted positive-class risk.
+
+    Ranking is independent of probability-threshold classification. Equal
+    scores are resolved by original input position via stable ``mergesort``;
+    no classification threshold, including the frozen 0.49 threshold, affects
+    membership or order. Labels and scores are retained for later evaluation.
+    """
+    true = _validate_binary(_as_1d_array(y_true, name="y_true"), name="y_true")
+    score = _validate_scores(_as_1d_array(y_score, name="y_score"))
+    if len(true) != len(score):
+        raise EvaluationError("y_true and y_score lengths must match.")
+
+    order = np.argsort(-score, kind="mergesort")
+    return tuple(
+        RankedRiskRecord(
+            rank=rank,
+            original_position=int(original_position),
+            y_true=int(true[original_position]),
+            y_score=float(score[original_position]),
+        )
+        for rank, original_position in enumerate(order, start=1)
+    )
+
+
+def capacity_to_k(n_samples: object, capacity: object) -> int:
+    """Convert an operational capacity fraction to an exact selected count.
+
+    Capacity must be in ``(0, 1]`` and means the fraction of highest-risk
+    observations that operations can review, not a score cutoff. The exact
+    count uses ``ceil(n_samples * capacity)`` deterministically.
+    """
+    if (
+        isinstance(n_samples, (bool, np.bool_))
+        or not isinstance(n_samples, (int, np.integer))
+        or int(n_samples) <= 0
+    ):
+        raise EvaluationError("n_samples must be a positive integer.")
+    if isinstance(capacity, (bool, np.bool_)):
+        raise EvaluationError("capacity must be a number in the interval (0, 1].")
+    try:
+        fraction = float(capacity)
+    except (TypeError, ValueError) as exc:
+        raise EvaluationError(
+            "capacity must be a number in the interval (0, 1]."
+        ) from exc
+    if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+        raise EvaluationError("capacity must be in the interval (0, 1].")
+    return int(ceil(int(n_samples) * fraction))
+
+
+def select_top_k(
+    ranked_records: object,
+    *,
+    capacity: object,
+) -> tuple[RankedRiskRecord, ...]:
+    """Select exactly the first ``K`` records from a risk ranking.
+
+    A capacity of 0.10 selects the highest-risk 10% after converting capacity
+    with :func:`capacity_to_k`; it does not mean ``y_score >= 0.10``. Selection
+    uses rank only and is independent of the frozen classification threshold.
+    """
+    try:
+        records = tuple(ranked_records)
+    except TypeError as exc:
+        raise EvaluationError("ranked_records must be an iterable.") from exc
+    if not records:
+        raise EvaluationError("ranked_records must not be empty.")
+    if not all(isinstance(record, RankedRiskRecord) for record in records):
+        raise EvaluationError("ranked_records must contain RankedRiskRecord values.")
+    expected_ranks = tuple(range(1, len(records) + 1))
+    if tuple(record.rank for record in records) != expected_ranks:
+        raise EvaluationError("ranked_records must be ordered by contiguous rank.")
+
+    selected_count = capacity_to_k(len(records), capacity)
+    return records[:selected_count]
 
 
 def top_k_metrics(
