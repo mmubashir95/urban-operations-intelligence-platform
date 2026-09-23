@@ -32,7 +32,9 @@ from sklearn.metrics import (
 )
 
 
-TOP_K_FRACTIONS: Final = (0.05, 0.10, 0.20)
+TOP_K_CAPACITIES: Final = (0.05, 0.10, 0.20)
+# Backward-compatible name used by the legacy Month 1 metric contract.
+TOP_K_FRACTIONS: Final = TOP_K_CAPACITIES
 NEGATIVE_LABEL: Final = 0
 POSITIVE_LABEL: Final = 1
 ZERO_DIVISION: Final = 0
@@ -96,6 +98,23 @@ class RankedRiskRecord:
 
     def to_dict(self) -> dict[str, object]:
         """Return a flat JSON-safe ranked-record mapping."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CapacityLevel:
+    """One predefined percentage capacity and its exact complaint count.
+
+    ``capacity`` is the fraction of highest-risk complaints operations can
+    review, not a probability threshold. Fixed complaint-count capacities,
+    such as complaints per day, are intentionally deferred to a later phase.
+    """
+
+    capacity: float
+    k: int
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a flat JSON-safe capacity-level mapping."""
         return asdict(self)
 
 
@@ -1119,6 +1138,24 @@ def capacity_to_k(n_samples: object, capacity: object) -> int:
     if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
         raise EvaluationError("capacity must be in the interval (0, 1].")
     return int(ceil(int(n_samples) * fraction))
+
+
+def get_standard_capacity_levels(n_samples: object) -> tuple[CapacityLevel, ...]:
+    """Expand the predefined Phase 5 capacities into exact ``K`` values.
+
+    Phase 5 evaluates operational capacity at 5%, 10%, and 20%, in that order.
+    Each value means review that fraction of the highest-risk ranking; it is
+    not a score threshold and is unrelated to the frozen 0.49 classification
+    threshold. Exact counts delegate to :func:`capacity_to_k`, whose rule is
+    ``ceil(n_samples * capacity)``.
+    """
+    return tuple(
+        CapacityLevel(
+            capacity=capacity,
+            k=capacity_to_k(n_samples, capacity),
+        )
+        for capacity in TOP_K_CAPACITIES
+    )
 
 
 def select_top_k(
