@@ -932,10 +932,14 @@ def test_phase_5_4_outputs_are_validation_only_deterministic_and_preserve_phase_
         project_root,
     )
 
-    first_paths = _write_phase_5_4_outputs(comparison)
+    population = {
+        "validation_sample_count": len(labels),
+        "validation_positive_count": sum(labels),
+    }
+    first_paths = _write_phase_5_4_outputs(comparison, **population)
     first_csv = first_paths[0].read_bytes()
     first_report = first_paths[1].read_bytes()
-    second_paths = _write_phase_5_4_outputs(comparison)
+    second_paths = _write_phase_5_4_outputs(comparison, **population)
 
     assert first_paths == second_paths
     assert first_paths[0].read_bytes() == first_csv
@@ -953,8 +957,63 @@ def test_phase_5_4_outputs_are_validation_only_deterministic_and_preserve_phase_
     assert "test set is not used" in report
     assert "does not select or freeze" in report
     assert "frozen `0.49` threshold are not used" in report
+    assert "validation population of\n20 complaints, of which 8" in report
+    assert (
+        "- 5% to 10%: 1 additional reviews add 0.00 recall percentage points; "
+        "Precision@K moves from 1.0000 to 0.5000 (-50.00 percentage points)."
+    ) in report
+    assert "tie-ordering effect" in report
+    assert "optimal" not in report.lower()
+    assert "recommend " not in report.lower()
 
     test_labeled = comparison.copy()
     test_labeled["evaluated_split"] = "test"
     with pytest.raises(EvaluationError, match="must use validation"):
-        _write_phase_5_4_outputs(test_labeled)
+        _write_phase_5_4_outputs(test_labeled, **population)
+
+
+@pytest.mark.parametrize(
+    ("sample_count", "positive_count", "message"),
+    [
+        (30, 8, "selected counts do not match the validation population"),
+        (20, 10, "recall does not match the validation positive count"),
+    ],
+)
+def test_phase_5_4_outputs_reject_comparison_from_another_population(
+    tmp_path,
+    monkeypatch,
+    sample_count: int,
+    positive_count: int,
+    message: str,
+) -> None:
+    """Scores from a differently sized or labelled split cannot pass as validation."""
+    labels = [1, 0, 1, 0, 1, 0, 0, 1, 0, 0] * 2
+    scores = [1.0 - index / 20 for index in range(20)]
+    comparison = build_logistic_validation_capacity_comparison_table(
+        compare_capacity_levels(labels, scores)
+    )
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        project_root / "reports/12_baseline_modelling",
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.TABLES_DIR",
+        project_root / "reports/12_baseline_modelling/tables",
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_TABLES_DIR",
+        project_root / "reports/tables",
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+
+    with pytest.raises(EvaluationError, match=message):
+        _write_phase_5_4_outputs(
+            comparison,
+            validation_sample_count=sample_count,
+            validation_positive_count=positive_count,
+        )
+    assert not (project_root / "reports").exists()

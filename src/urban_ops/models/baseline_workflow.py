@@ -68,6 +68,7 @@ from urban_ops.models.evaluation import (
     MANUAL_CLASSIFICATION_THRESHOLDS,
     PR_AUC_DEFINITION,
     SWEEP_CLASSIFICATION_THRESHOLDS,
+    TOP_K_CAPACITIES,
     CalibrationEvaluation,
     CapacityComparisonRow,
     ClassificationMetrics,
@@ -86,6 +87,7 @@ from urban_ops.models.evaluation import (
     evaluate_threshold_selection_policies,
     evaluate_threshold_sweep,
     freeze_workload_limited_threshold,
+    get_standard_capacity_levels,
     metrics_row,
     validate_frozen_threshold_decision,
 )
@@ -1527,13 +1529,55 @@ def _format_phase_5_4_table(results: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def _write_phase_5_4_outputs(results: pd.DataFrame) -> tuple[Path, Path]:
+def _verify_capacity_comparison_population(
+    results: pd.DataFrame,
+    *,
+    sample_count: int,
+    positive_count: int,
+) -> None:
+    """Reject a comparison whose K values or recall denominator are not validation's.
+
+    The table's ``evaluated_split`` label is set by its builder, so it cannot
+    detect scores from another split. Each ``K`` must instead equal
+    ``ceil(sample_count × capacity)`` and each recall must use the validation
+    positive count, which ties the persisted evidence to the validation rows.
+    """
+    expected_k = [
+        level.k for level in get_standard_capacity_levels(sample_count)
+    ]
+    if results["selected_count"].astype(int).tolist() != expected_k:
+        raise EvaluationError(
+            "Phase 5.4 selected counts do not match the validation population."
+        )
+    for row in results.itertuples(index=False):
+        selected_positive = round(row.precision_at_k * row.selected_count)
+        expected_recall = (
+            selected_positive / positive_count if positive_count else 0.0
+        )
+        if not math.isclose(
+            row.recall_at_k, expected_recall, rel_tol=0.0, abs_tol=1e-12
+        ):
+            raise EvaluationError(
+                "Phase 5.4 recall does not match the validation positive count."
+            )
+
+
+def _write_phase_5_4_outputs(
+    results: pd.DataFrame,
+    *,
+    validation_sample_count: int,
+    validation_positive_count: int,
+) -> tuple[Path, Path]:
     """Write validation-only Phase 5.4 capacity evidence and interpretation."""
     if results["evaluated_split"].tolist() != ["validation"] * len(results):
         raise EvaluationError("Phase 5.4 capacity comparison must use validation.")
-    expected_capacities = [0.05, 0.10, 0.20]
-    if results["capacity"].tolist() != expected_capacities:
+    if results["capacity"].tolist() != list(TOP_K_CAPACITIES):
         raise EvaluationError("Phase 5.4 requires capacities 0.05, 0.10, and 0.20.")
+    _verify_capacity_comparison_population(
+        results,
+        sample_count=validation_sample_count,
+        positive_count=validation_positive_count,
+    )
 
     filename = "logistic_regression_validation_capacity_comparison.csv"
     report_filename = "phase_5_4_capacity_comparison.md"
@@ -1555,6 +1599,16 @@ def _write_phase_5_4_outputs(results: pd.DataFrame) -> tuple[Path, Path]:
     recall_increments = "\n".join(
         f"- {rows[index - 1].capacity_pct:.0f}% to {row.capacity_pct:.0f}%: "
         f"+{row.additional_recall_pct_points:.2f} recall percentage points."
+        for index, row in enumerate(rows[1:], start=1)
+    )
+    step_interpretations = "\n".join(
+        f"- {rows[index - 1].capacity_pct:.0f}% to {row.capacity_pct:.0f}%: "
+        f"{int(row.additional_selected_count):,} additional reviews add "
+        f"{row.additional_recall_pct_points:.2f} recall percentage points; "
+        f"Precision@K moves from {rows[index - 1].precision_at_k:.4f} to "
+        f"{row.precision_at_k:.4f} "
+        f"({(row.precision_at_k - rows[index - 1].precision_at_k) * 100.0:+.2f} "
+        "percentage points)."
         for index, row in enumerate(rows[1:], start=1)
     )
     report = f"""# Phase 5.4 — Validation Capacity Comparison
@@ -1581,7 +1635,9 @@ predictions and the frozen `0.49` threshold are not used for Top-K selection.
 ## Capacity Semantics
 
 The fixed comparison levels are Top 5%, Top 10%, and Top 20%. Exact reviewed
-counts use `ceil(n × capacity)` on the validation population.
+counts use `ceil(n × capacity)` on the validation population of
+{validation_sample_count:,} complaints, of which {validation_positive_count:,}
+actually missed their target (the Recall@K denominator).
 
 ## Capacity Comparison
 
@@ -1608,12 +1664,20 @@ Increasing capacity reviews a larger prefix of the same deterministic risk
 ranking. The table shows the additional workload, captured recall, and precision
 at each step without declaring any capacity superior.
 
+{step_interpretations}
+
 ## Limitations and Scope Boundary
 
 This phase compares operational capacity levels. It does not select or freeze a
 preferred capacity policy. It does not add an absolute-K policy, daily staffing
 model, lift metric, cost-benefit model, capacity curve, or test-driven tuning.
 Existing final test Top-K evidence remains separate and unchanged.
+
+Logistic Regression scores contain many exact ties, and a tied score group can
+straddle a capacity boundary. Which tied complaints fall inside Top-K is then
+decided by original input order. The results are reproducible, but small
+Precision@K differences between capacities, in the second decimal place, can
+fall within this tie-ordering effect and should not be read as a ranking signal.
 
 Machine-readable artifact:
 `reports/tables/{filename}`
@@ -2777,7 +2841,9 @@ def run_baseline_workflow(
         decision=frozen_threshold_decision,
     )
     capacity_comparison_artifact_paths = _write_phase_5_4_outputs(
-        logistic_validation_capacity_comparison
+        logistic_validation_capacity_comparison,
+        validation_sample_count=len(inputs.targets["validation"]),
+        validation_positive_count=int(inputs.targets["validation"].sum()),
     )
     _write_ranking_figures(
         validation_results=validation_results,

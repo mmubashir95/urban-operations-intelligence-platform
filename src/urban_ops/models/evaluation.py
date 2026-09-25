@@ -1242,8 +1242,9 @@ def top_k_metrics(
 ) -> TopKMetrics:
     """Compute metrics for the highest-risk fraction of rows.
 
-    The selected row count is `max(1, ceil(n * fraction))`. Ties are resolved by
-    original row order after sorting by score descending, using stable mergesort.
+    Ranking delegates to :func:`rank_by_risk` (descending score, stable ties by
+    original row order) and the selected row count to :func:`capacity_to_k`,
+    which uses ``ceil(n * fraction)`` for ``fraction`` in ``(0, 1]``.
     """
     ranked = rank_by_risk(y_true, y_score)
     return _top_k_metrics_from_ranking(ranked, capacity=fraction)
