@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 from scipy import sparse
 
 from urban_ops.models.baselines import LogisticRegressionBaseline
@@ -22,9 +23,11 @@ from urban_ops.models.baseline_workflow import (
     _write_phase_4_5_outputs,
     _write_phase_4_6_outputs,
     _write_phase_4_7_outputs,
+    _write_phase_5_4_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
     build_logistic_validation_policy_table,
+    build_logistic_validation_capacity_comparison_table,
     build_logistic_validation_threshold_table,
     build_logistic_validation_manual_threshold_table,
     build_logistic_validation_sweep_table,
@@ -38,7 +41,9 @@ from urban_ops.models.baseline_workflow import (
 from urban_ops.models.evaluation import (
     MANUAL_CLASSIFICATION_THRESHOLDS,
     SWEEP_CLASSIFICATION_THRESHOLDS,
+    EvaluationError,
     FrozenThresholdDecision,
+    compare_capacity_levels,
     evaluate_basic_classifier,
     evaluate_manual_thresholds,
     evaluate_threshold,
@@ -870,3 +875,86 @@ def test_phase_4_7_outputs_evaluate_test_at_frozen_threshold_without_rewriting_d
     assert report == (
         project_root / "reports/phase_4_7_frozen_threshold_test_evaluation.md"
     ).read_text(encoding="utf-8")
+
+
+def test_phase_5_4_outputs_are_validation_only_deterministic_and_preserve_phase_4(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The workflow writer persists only fixed validation capacity evidence."""
+    labels = [1, 0, 1, 0, 1, 0, 0, 1, 0, 0] * 2
+    scores = [
+        0.99,
+        0.95,
+        0.90,
+        0.85,
+        0.80,
+        0.75,
+        0.70,
+        0.65,
+        0.60,
+        0.55,
+        0.50,
+        0.45,
+        0.40,
+        0.35,
+        0.30,
+        0.25,
+        0.20,
+        0.15,
+        0.10,
+        0.05,
+    ]
+    comparison = build_logistic_validation_capacity_comparison_table(
+        compare_capacity_levels(labels, scores)
+    )
+    project_root = tmp_path / "project"
+    phase_report_dir = project_root / "reports/12_baseline_modelling"
+    root_tables_dir = project_root / "reports/tables"
+    decision_path = project_root / "configs/models/threshold_decision.json"
+    decision_path.parent.mkdir(parents=True)
+    decision_path.write_text('{"selected_threshold": 0.49, "frozen": true}\n')
+    frozen_before = decision_path.read_bytes()
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        phase_report_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.TABLES_DIR",
+        phase_report_dir / "tables",
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_TABLES_DIR",
+        root_tables_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+
+    first_paths = _write_phase_5_4_outputs(comparison)
+    first_csv = first_paths[0].read_bytes()
+    first_report = first_paths[1].read_bytes()
+    second_paths = _write_phase_5_4_outputs(comparison)
+
+    assert first_paths == second_paths
+    assert first_paths[0].read_bytes() == first_csv
+    assert first_paths[1].read_bytes() == first_report
+    assert decision_path.read_bytes() == frozen_before
+    persisted = pd.read_csv(first_paths[0])
+    assert persisted["evaluated_split"].tolist() == ["validation"] * 3
+    assert persisted["capacity"].tolist() == [0.05, 0.10, 0.20]
+    assert persisted["selected_count"].tolist() == [1, 2, 4]
+    assert (phase_report_dir / "tables" / first_paths[0].name).read_bytes() == first_csv
+    phase_report = phase_report_dir / "phase_5_4_capacity_comparison.md"
+    assert phase_report.read_bytes() == first_report
+    report = first_report.decode("utf-8")
+    assert "The comparison uses the `validation` split" in report
+    assert "test set is not used" in report
+    assert "does not select or freeze" in report
+    assert "frozen `0.49` threshold are not used" in report
+
+    test_labeled = comparison.copy()
+    test_labeled["evaluated_split"] = "test"
+    with pytest.raises(EvaluationError, match="must use validation"):
+        _write_phase_5_4_outputs(test_labeled)

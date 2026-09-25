@@ -69,6 +69,7 @@ from urban_ops.models.evaluation import (
     PR_AUC_DEFINITION,
     SWEEP_CLASSIFICATION_THRESHOLDS,
     CalibrationEvaluation,
+    CapacityComparisonRow,
     ClassificationMetrics,
     EvaluationError,
     RankingEvaluation,
@@ -76,6 +77,7 @@ from urban_ops.models.evaluation import (
     ThresholdPolicyResult,
     FrozenThresholdDecision,
     build_calibration_table,
+    compare_capacity_levels,
     evaluate_binary_classifier,
     evaluate_calibration,
     evaluate_manual_thresholds,
@@ -153,11 +155,13 @@ class BaselineWorkflowResult:
     logistic_validation_manual_threshold_results: pd.DataFrame
     logistic_validation_sweep_results: pd.DataFrame
     logistic_validation_policy_results: pd.DataFrame
+    logistic_validation_capacity_comparison: pd.DataFrame
     frozen_threshold_decision: FrozenThresholdDecision
     frozen_threshold_decision_path: Path
     logistic_test_frozen_threshold_result: pd.DataFrame
     frozen_threshold_generalization_results: pd.DataFrame
     threshold_tradeoff_figure_paths: tuple[Path, ...]
+    capacity_comparison_artifact_paths: tuple[Path, Path]
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
     selected_model_name: str
@@ -863,6 +867,42 @@ def build_logistic_validation_policy_table(
     )
 
 
+def build_logistic_validation_capacity_comparison_table(
+    results: tuple[CapacityComparisonRow, ...],
+) -> pd.DataFrame:
+    """Build the Phase 5.4 validation capacity comparison table."""
+    table = pd.DataFrame(
+        [
+            {
+                "model": "Logistic Regression",
+                "evaluated_split": "validation",
+                "capacity": result.capacity,
+                "capacity_pct": result.capacity * 100.0,
+                "selected_count": result.selected_count,
+                "precision_at_k": result.precision,
+                "recall_at_k": result.recall,
+                "additional_selected_count": result.additional_selected_count,
+                "additional_capacity_pct_points": (
+                    None
+                    if result.additional_capacity is None
+                    else result.additional_capacity * 100.0
+                ),
+                "additional_recall": result.additional_recall,
+                "additional_recall_pct_points": (
+                    None
+                    if result.additional_recall is None
+                    else result.additional_recall * 100.0
+                ),
+            }
+            for result in results
+        ]
+    )
+    table["additional_selected_count"] = table[
+        "additional_selected_count"
+    ].astype("Int64")
+    return table
+
+
 def build_logistic_test_frozen_threshold_table(
     metrics: ThresholdMetrics,
     decision: FrozenThresholdDecision,
@@ -1459,6 +1499,129 @@ Machine-readable artifacts:
     )
     report_path.write_text(report, encoding="utf-8")
     return ROOT_TABLES_DIR / test_filename, ROOT_TABLES_DIR / gap_filename
+
+
+def _format_phase_5_4_table(results: pd.DataFrame) -> str:
+    """Render the human-readable Phase 5.4 capacity comparison table."""
+    lines = [
+        "| Capacity | Reviewed complaints | Precision@K | Recall@K | "
+        "Extra workload | Extra recall |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in results.itertuples(index=False):
+        extra_workload = (
+            "—"
+            if pd.isna(row.additional_selected_count)
+            else f"+{int(row.additional_selected_count):,}"
+        )
+        extra_recall = (
+            "—"
+            if pd.isna(row.additional_recall_pct_points)
+            else f"+{row.additional_recall_pct_points:.2f} pp"
+        )
+        lines.append(
+            f"| {row.capacity_pct:.0f}% | {int(row.selected_count):,} | "
+            f"{row.precision_at_k:.4f} | {row.recall_at_k:.4f} | "
+            f"{extra_workload} | {extra_recall} |"
+        )
+    return "\n".join(lines)
+
+
+def _write_phase_5_4_outputs(results: pd.DataFrame) -> tuple[Path, Path]:
+    """Write validation-only Phase 5.4 capacity evidence and interpretation."""
+    if results["evaluated_split"].tolist() != ["validation"] * len(results):
+        raise EvaluationError("Phase 5.4 capacity comparison must use validation.")
+    expected_capacities = [0.05, 0.10, 0.20]
+    if results["capacity"].tolist() != expected_capacities:
+        raise EvaluationError("Phase 5.4 requires capacities 0.05, 0.10, and 0.20.")
+
+    filename = "logistic_regression_validation_capacity_comparison.csv"
+    report_filename = "phase_5_4_capacity_comparison.md"
+    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    root_report_path = PROJECT_ROOT / "reports" / report_filename
+    root_report_path.parent.mkdir(parents=True, exist_ok=True)
+    for directory in (TABLES_DIR, ROOT_TABLES_DIR):
+        results.to_csv(directory / filename, index=False)
+
+    rows = list(results.itertuples(index=False))
+    workload_increments = "\n".join(
+        f"- {rows[index - 1].capacity_pct:.0f}% to {row.capacity_pct:.0f}%: "
+        f"review {int(row.additional_selected_count):,} additional complaints "
+        f"(+{row.additional_capacity_pct_points:.2f} capacity percentage points)."
+        for index, row in enumerate(rows[1:], start=1)
+    )
+    recall_increments = "\n".join(
+        f"- {rows[index - 1].capacity_pct:.0f}% to {row.capacity_pct:.0f}%: "
+        f"+{row.additional_recall_pct_points:.2f} recall percentage points."
+        for index, row in enumerate(rows[1:], start=1)
+    )
+    report = f"""# Phase 5.4 — Validation Capacity Comparison
+
+## Purpose
+
+This phase compares operational capacity levels for reviewing the complaints
+with the highest predicted missed-target risk. It does not select or freeze a
+preferred capacity policy.
+
+## Evaluation Split
+
+The comparison uses the `validation` split. The test set is not used for
+capacity selection, optimization, ranking, or recommendation.
+
+## Score Source and Ranking Semantics
+
+The score is the continuous Logistic Regression positive-class probability
+from `predict_proba(X)[:, 1]`, where class `1` means a missed expected
+resolution target. Complaints are ranked by descending continuous risk.
+Equal-score ties preserve original input order deterministically. Thresholded
+predictions and the frozen `0.49` threshold are not used for Top-K selection.
+
+## Capacity Semantics
+
+The fixed comparison levels are Top 5%, Top 10%, and Top 20%. Exact reviewed
+counts use `ceil(n × capacity)` on the validation population.
+
+## Capacity Comparison
+
+{_format_phase_5_4_table(results)}
+
+Precision@K is the fraction of reviewed complaints that actually missed their
+target. Recall@K is the fraction of all actual missed-target complaints found
+inside the reviewed Top-K group.
+
+## Incremental Workload Analysis
+
+{workload_increments}
+
+## Incremental Recall Analysis
+
+{recall_increments}
+
+Recall changes above are absolute percentage-point changes, not relative
+percentage improvements.
+
+## Operational Interpretation
+
+Increasing capacity reviews a larger prefix of the same deterministic risk
+ranking. The table shows the additional workload, captured recall, and precision
+at each step without declaring any capacity superior.
+
+## Limitations and Scope Boundary
+
+This phase compares operational capacity levels. It does not select or freeze a
+preferred capacity policy. It does not add an absolute-K policy, daily staffing
+model, lift metric, cost-benefit model, capacity curve, or test-driven tuning.
+Existing final test Top-K evidence remains separate and unchanged.
+
+Machine-readable artifact:
+`reports/tables/{filename}`
+"""
+    phase_report_path = BASELINE_REPORT_DIR / report_filename
+    phase_report_path.write_text(report, encoding="utf-8")
+    root_report_path.write_text(report, encoding="utf-8")
+    return ROOT_TABLES_DIR / filename, root_report_path
 
 
 def _write_phase_4_3_outputs(results: pd.DataFrame) -> None:
@@ -2529,6 +2692,17 @@ def run_baseline_workflow(
             test_metrics=logistic_test_frozen_threshold_metrics,
         )
     )
+    logistic_validation_scores = logistic_model.predict_score(
+        inputs.matrices["validation"]
+    )
+    logistic_validation_capacity_comparison = (
+        build_logistic_validation_capacity_comparison_table(
+            compare_capacity_levels(
+                inputs.targets["validation"],
+                logistic_validation_scores,
+            )
+        )
+    )
     selected_model_name = select_baseline(validation_results)
     _, validation_score, selected_threshold = _split_predictions(
         selected_model_name,
@@ -2602,6 +2776,9 @@ def run_baseline_workflow(
         generalization_results=frozen_threshold_generalization_results,
         decision=frozen_threshold_decision,
     )
+    capacity_comparison_artifact_paths = _write_phase_5_4_outputs(
+        logistic_validation_capacity_comparison
+    )
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -2642,6 +2819,9 @@ def run_baseline_workflow(
         ),
         logistic_validation_sweep_results=logistic_validation_sweep_results,
         logistic_validation_policy_results=logistic_validation_policy_results,
+        logistic_validation_capacity_comparison=(
+            logistic_validation_capacity_comparison
+        ),
         frozen_threshold_decision=frozen_threshold_decision,
         frozen_threshold_decision_path=frozen_threshold_decision_path,
         logistic_test_frozen_threshold_result=logistic_test_frozen_threshold_result,
@@ -2649,6 +2829,7 @@ def run_baseline_workflow(
             frozen_threshold_generalization_results
         ),
         threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
+        capacity_comparison_artifact_paths=capacity_comparison_artifact_paths,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,
         selected_model_name=selected_model_name,

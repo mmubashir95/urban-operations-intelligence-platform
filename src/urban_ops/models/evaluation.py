@@ -119,6 +119,23 @@ class CapacityLevel:
 
 
 @dataclass(frozen=True)
+class CapacityComparisonRow:
+    """One operational capacity result and its adjacent-capacity changes."""
+
+    capacity: float
+    selected_count: int
+    precision: float
+    recall: float
+    additional_selected_count: int | None
+    additional_capacity: float | None
+    additional_recall: float | None
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a flat JSON-safe capacity-comparison mapping."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class TopKMetrics:
     """Precision and recall for a deterministic highest-risk slice."""
 
@@ -1201,6 +1218,25 @@ def select_top_k(
     return records[:selected_count]
 
 
+def _top_k_metrics_from_ranking(
+    ranked_records: tuple[RankedRiskRecord, ...],
+    *,
+    capacity: float,
+) -> TopKMetrics:
+    """Calculate Top-K metrics from one already validated risk ranking."""
+    selected = select_top_k(ranked_records, capacity=capacity)
+    selected_positive = sum(record.y_true for record in selected)
+    total_positive = sum(record.y_true for record in ranked_records)
+    return TopKMetrics(
+        fraction=float(capacity),
+        selected_count=len(selected),
+        precision=float(selected_positive / len(selected)),
+        recall=(
+            float(selected_positive / total_positive) if total_positive else 0.0
+        ),
+    )
+
+
 def top_k_metrics(
     y_true: object, y_score: object, *, fraction: float
 ) -> TopKMetrics:
@@ -1209,26 +1245,60 @@ def top_k_metrics(
     The selected row count is `max(1, ceil(n * fraction))`. Ties are resolved by
     original row order after sorting by score descending, using stable mergesort.
     """
-    true = _validate_binary(_as_1d_array(y_true, name="y_true"), name="y_true")
-    score = _validate_scores(_as_1d_array(y_score, name="y_score"))
-    if len(true) != len(score):
-        raise EvaluationError("y_true and y_score lengths must match.")
-    if not 0.0 < fraction <= 1.0:
-        raise EvaluationError("fraction must be in the interval (0, 1].")
-    selected_count = max(1, int(ceil(len(true) * fraction)))
-    order = np.argsort(-score, kind="mergesort")
-    selected = order[:selected_count]
-    selected_true = true[selected]
-    selected_positive = int(selected_true.sum())
-    total_positive = int(true.sum())
-    precision = float(selected_positive / selected_count)
-    recall = float(selected_positive / total_positive) if total_positive else 0.0
-    return TopKMetrics(
-        fraction=float(fraction),
-        selected_count=selected_count,
-        precision=precision,
-        recall=recall,
-    )
+    ranked = rank_by_risk(y_true, y_score)
+    return _top_k_metrics_from_ranking(ranked, capacity=fraction)
+
+
+def compare_capacity_levels(
+    y_true: object,
+    y_score: object,
+    *,
+    capacities: tuple[float, ...] = TOP_K_CAPACITIES,
+) -> tuple[CapacityComparisonRow, ...]:
+    """Compare deterministic Top-K metrics across ascending capacity levels.
+
+    Records are ranked once using :func:`rank_by_risk`. Each capacity then
+    reuses :func:`select_top_k`, so score ordering, stable ties, and ceiling
+    conversion remain governed by the existing Top-K contract. Incremental
+    fields compare adjacent capacity rows and are ``None`` for the first row.
+    """
+    ranked = rank_by_risk(y_true, y_score)
+    if not capacities:
+        raise EvaluationError("capacities must not be empty.")
+
+    normalized_values: list[float] = []
+    for capacity in capacities:
+        capacity_to_k(len(ranked), capacity)
+        normalized_values.append(float(capacity))
+    normalized = tuple(normalized_values)
+    if len(set(normalized)) != len(normalized):
+        raise EvaluationError("capacities must contain unique values.")
+    ordered = tuple(sorted(normalized))
+
+    rows: list[CapacityComparisonRow] = []
+    previous: CapacityComparisonRow | None = None
+    for capacity in ordered:
+        metrics = _top_k_metrics_from_ranking(ranked, capacity=capacity)
+        row = CapacityComparisonRow(
+            capacity=capacity,
+            selected_count=metrics.selected_count,
+            precision=metrics.precision,
+            recall=metrics.recall,
+            additional_selected_count=(
+                None
+                if previous is None
+                else metrics.selected_count - previous.selected_count
+            ),
+            additional_capacity=(
+                None if previous is None else capacity - previous.capacity
+            ),
+            additional_recall=(
+                None if previous is None else metrics.recall - previous.recall
+            ),
+        )
+        rows.append(row)
+        previous = row
+    return tuple(rows)
 
 
 def evaluate_binary_classifier(

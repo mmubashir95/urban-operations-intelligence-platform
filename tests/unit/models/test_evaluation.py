@@ -22,6 +22,7 @@ from urban_ops.models.evaluation import (
     FROZEN_THRESHOLD_SECONDARY_OBJECTIVE,
     BasicClassificationMetrics,
     CalibrationEvaluation,
+    CapacityComparisonRow,
     EvaluationError,
     FrozenThresholdDecision,
     RankedRiskRecord,
@@ -31,6 +32,7 @@ from urban_ops.models.evaluation import (
     build_calibration_table,
     capacity_to_k,
     classify_scores_at_threshold,
+    compare_capacity_levels,
     evaluate_basic_classifier,
     evaluate_binary_classifier,
     evaluate_calibration,
@@ -240,6 +242,71 @@ def test_select_top_k_accepts_rankings_with_tied_scores() -> None:
     selected = select_top_k(ranked, capacity=0.50)
 
     assert [record.original_position for record in selected] == [0, 1]
+
+
+def test_compare_capacity_levels_calculates_metrics_and_adjacent_changes() -> None:
+    """Capacity comparison reuses exact Top-K counts and adjacent deltas."""
+    y_true = [1, 0, 1, 0, 1, 0, 0, 1, 0, 0]
+    y_score = [0.91, 0.82, 0.73, 0.64, 0.55, 0.46, 0.37, 0.28, 0.19, 0.10]
+
+    rows = compare_capacity_levels(
+        y_true,
+        y_score,
+        capacities=(0.20, 0.05, 0.10),
+    )
+
+    assert all(isinstance(row, CapacityComparisonRow) for row in rows)
+    assert [row.capacity for row in rows] == [0.05, 0.10, 0.20]
+    assert [row.selected_count for row in rows] == [1, 1, 2]
+    assert [row.precision for row in rows] == pytest.approx([1.0, 1.0, 0.5])
+    assert [row.recall for row in rows] == pytest.approx([0.25, 0.25, 0.25])
+    assert rows[0].additional_selected_count is None
+    assert rows[0].additional_capacity is None
+    assert rows[0].additional_recall is None
+    assert [row.additional_selected_count for row in rows[1:]] == [0, 1]
+    assert [row.additional_capacity for row in rows[1:]] == pytest.approx(
+        [0.05, 0.10]
+    )
+    assert [row.additional_recall for row in rows[1:]] == pytest.approx([0.0, 0.0])
+
+
+def test_compare_standard_capacities_uses_scores_and_ties_deterministically() -> None:
+    """Continuous score order and stable ties govern repeatable capacity rows."""
+    y_true = [0] * 17 + [1, 0, 1]
+    y_score = [0.01] * 17 + [0.20, 0.20, 0.10]
+
+    first = compare_capacity_levels(y_true, y_score)
+    repeated = compare_capacity_levels(y_true, y_score)
+
+    assert first == repeated
+    assert [row.capacity for row in first] == [0.05, 0.10, 0.20]
+    assert [row.selected_count for row in first] == [1, 2, 4]
+    assert [row.precision for row in first] == pytest.approx([1.0, 0.5, 0.5])
+    assert [row.recall for row in first] == pytest.approx([0.5, 0.5, 1.0])
+    assert first[0].precision == 1.0  # A 0.20 score ranks first despite being < 0.49.
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_score", "capacities", "message"),
+    [
+        ([], [], (0.05,), "must not be empty"),
+        ([0, 1], [0.5], (0.05,), "lengths must match"),
+        ([0, 2], [0.5, 0.6], (0.05,), "0/1"),
+        ([0, 1], [0.5, float("nan")], (0.05,), "finite"),
+        ([0, 1], [0.5, 0.6], (), "must not be empty"),
+        ([0, 1], [0.5, 0.6], (0.10, 0.10), "unique"),
+        ([0, 1], [0.5, 0.6], (0.0,), "interval"),
+    ],
+)
+def test_compare_capacity_levels_reuses_existing_input_validation(
+    y_true,
+    y_score,
+    capacities,
+    message: str,
+) -> None:
+    """Malformed comparison inputs fail through established evaluation rules."""
+    with pytest.raises(EvaluationError, match=message):
+        compare_capacity_levels(y_true, y_score, capacities=capacities)
 
 
 def test_threshold_conversion_includes_score_equal_to_threshold() -> None:
