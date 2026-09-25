@@ -262,9 +262,11 @@ def test_compare_capacity_levels_calculates_metrics_and_adjacent_changes() -> No
     assert [row.precision for row in rows] == pytest.approx([1.0, 1.0, 0.5])
     assert [row.recall for row in rows] == pytest.approx([0.25, 0.25, 0.25])
     assert rows[0].additional_selected_count is None
+    assert rows[0].additional_captured_positive_count is None
     assert rows[0].additional_capacity is None
     assert rows[0].additional_recall is None
     assert [row.additional_selected_count for row in rows[1:]] == [0, 1]
+    assert [row.additional_captured_positive_count for row in rows[1:]] == [0, 0]
     assert [row.additional_capacity for row in rows[1:]] == pytest.approx(
         [0.05, 0.10]
     )
@@ -290,6 +292,11 @@ def test_compare_standard_capacities_uses_scores_and_ties_deterministically() ->
     assert [row.capacity for row in first] == [0.05, 0.10, 0.20]
     assert [row.selected_count for row in first] == [1, 2, 4]
     assert [row.captured_positive_count for row in first] == [1, 1, 2]
+    assert [row.additional_captured_positive_count for row in first] == [
+        None,
+        0,
+        1,
+    ]
     assert [row.precision for row in first] == pytest.approx([1.0, 0.5, 0.5])
     assert [row.recall for row in first] == pytest.approx([0.5, 0.5, 1.0])
     assert first[0].precision == 1.0  # A 0.20 score ranks first despite being < 0.49.

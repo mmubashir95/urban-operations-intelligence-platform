@@ -886,6 +886,9 @@ def build_logistic_validation_capacity_comparison_table(
                 "precision_at_k": result.precision,
                 "recall_at_k": result.recall,
                 "additional_selected_count": result.additional_selected_count,
+                "additional_captured_positive_count": (
+                    result.additional_captured_positive_count
+                ),
                 "additional_capacity_pct_points": (
                     None
                     if result.additional_capacity is None
@@ -901,9 +904,8 @@ def build_logistic_validation_capacity_comparison_table(
             for result in results
         ]
     )
-    table["additional_selected_count"] = table[
-        "additional_selected_count"
-    ].astype("Int64")
+    for column in ("additional_selected_count", "additional_captured_positive_count"):
+        table[column] = table[column].astype("Int64")
     return table
 
 
@@ -1722,6 +1724,7 @@ def _write_phase_5_5_figures(results: pd.DataFrame) -> tuple[Path, ...]:
     import matplotlib.pyplot as plt
 
     required = {
+        "capacity",
         "capacity_pct",
         "selected_count",
         "precision_at_k",
@@ -1737,55 +1740,72 @@ def _write_phase_5_5_figures(results: pd.DataFrame) -> tuple[Path, ...]:
     if data["capacity"].tolist() != list(TOP_K_CAPACITIES):
         raise EvaluationError("Phase 5.5 requires capacities 0.05, 0.10, and 0.20.")
 
+    from matplotlib.ticker import PercentFormatter
+
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     ROOT_FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
-    recall_figure, recall_axis = plt.subplots(figsize=(7, 5), dpi=150)
-    recall_axis.plot(data["capacity_pct"], data["recall_at_k"], marker="o")
-    recall_axis.set_xlabel("Operational capacity (%)")
-    recall_axis.set_ylabel("Recall@K")
-    recall_axis.set_title("Validation Recall by Operational Capacity")
-    recall_axis.set_xticks(data["capacity_pct"])
-    recall_axis.set_ylim(0, 1)
-    recall_figure.tight_layout()
+    figures = []
+    try:
+        recall_figure, recall_axis = plt.subplots(figsize=(7, 5), dpi=150)
+        figures.append(recall_figure)
+        recall_axis.plot(data["capacity_pct"], data["recall_at_k"], marker="o")
+        recall_axis.set_xlabel("Operational capacity (%)")
+        recall_axis.set_ylabel("Recall@K (%)")
+        recall_axis.set_title("Validation Recall by Operational Capacity")
+        recall_axis.set_xticks(data["capacity_pct"])
+        recall_axis.set_ylim(0, 1)
+        # Metrics stay as fractions; only the tick labels are shown as percent.
+        recall_axis.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+        recall_figure.tight_layout()
 
-    precision_figure, precision_axis = plt.subplots(figsize=(7, 5), dpi=150)
-    precision_axis.plot(
-        data["capacity_pct"], data["precision_at_k"], marker="o", color="C1"
-    )
-    precision_axis.set_xlabel("Operational capacity (%)")
-    precision_axis.set_ylabel("Precision@K")
-    precision_axis.set_title("Validation Precision by Operational Capacity")
-    precision_axis.set_xticks(data["capacity_pct"])
-    precision_axis.set_ylim(0, 1)
-    precision_figure.tight_layout()
+        precision_figure, precision_axis = plt.subplots(figsize=(7, 5), dpi=150)
+        figures.append(precision_figure)
+        precision_axis.plot(
+            data["capacity_pct"], data["precision_at_k"], marker="o", color="C1"
+        )
+        precision_axis.set_xlabel("Operational capacity (%)")
+        precision_axis.set_ylabel("Precision@K (%)")
+        precision_axis.set_title("Validation Precision by Operational Capacity")
+        precision_axis.set_xticks(data["capacity_pct"])
+        precision_axis.set_ylim(0, 1)
+        precision_axis.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+        precision_figure.tight_layout()
 
-    captured_figure, captured_axis = plt.subplots(figsize=(7, 5), dpi=150)
-    captured_axis.plot(
-        data["selected_count"],
-        data["captured_positive_count"],
-        marker="o",
-        color="C2",
-    )
-    captured_axis.set_xlabel("Number of complaints reviewed")
-    captured_axis.set_ylabel("Actual missed-target complaints captured")
-    captured_axis.set_title(
-        "Missed-Target Complaints Captured by Review Workload"
-    )
-    captured_axis.set_xticks(data["selected_count"])
-    captured_axis.set_ylim(bottom=0)
-    captured_figure.tight_layout()
+        captured_figure, captured_axis = plt.subplots(figsize=(7, 5), dpi=150)
+        figures.append(captured_figure)
+        captured_axis.plot(
+            data["selected_count"],
+            data["captured_positive_count"],
+            marker="o",
+            color="C2",
+        )
+        # Label each point with its capacity so workload counts map to 5/10/20%.
+        for row in data.itertuples(index=False):
+            captured_axis.annotate(
+                f"{row.capacity_pct:.0f}% capacity",
+                (row.selected_count, row.captured_positive_count),
+                textcoords="offset points",
+                xytext=(-6, 6),
+                ha="right",
+            )
+        captured_axis.set_xlabel("Number of complaints reviewed")
+        captured_axis.set_ylabel("Actual missed-target complaints captured")
+        captured_axis.set_title(
+            "Missed-Target Complaints Captured by Review Workload"
+        )
+        captured_axis.set_xticks(data["selected_count"])
+        captured_axis.set_xlim(0, data["selected_count"].max() * 1.05)
+        captured_axis.set_ylim(0, data["captured_positive_count"].max() * 1.12)
+        captured_figure.tight_layout()
 
-    artifacts = (
-        (recall_figure, _phase_5_5_figure_paths()[0].name),
-        (precision_figure, _phase_5_5_figure_paths()[1].name),
-        (captured_figure, _phase_5_5_figure_paths()[2].name),
-    )
-    for directory in (FIGURES_DIR, ROOT_FIGURES_DIR):
-        for figure, filename in artifacts:
-            figure.savefig(directory / filename)
-    for figure, _ in artifacts:
-        plt.close(figure)
+        filenames = [path.name for path in _phase_5_5_figure_paths()]
+        for directory in (FIGURES_DIR, ROOT_FIGURES_DIR):
+            for figure, filename in zip(figures, filenames):
+                figure.savefig(directory / filename)
+    finally:
+        for figure in figures:
+            plt.close(figure)
     return _phase_5_5_figure_paths()
 
 
@@ -1823,7 +1843,7 @@ def _write_phase_5_5_outputs(
     steps = "\n".join(
         f"- {rows[index - 1].capacity_pct:.0f}% to {row.capacity_pct:.0f}%: "
         f"{int(row.additional_selected_count):,} additional reviews capture "
-        f"{int(row.captured_positive_count - rows[index - 1].captured_positive_count):,} "
+        f"{int(row.additional_captured_positive_count):,} "
         f"additional misses; Recall@K changes by "
         f"{row.additional_recall_pct_points:+.2f} percentage points and "
         f"Precision@K moves from {rows[index - 1].precision_at_k:.4f} to "

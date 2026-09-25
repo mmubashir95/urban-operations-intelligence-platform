@@ -128,6 +128,7 @@ class CapacityComparisonRow:
     precision: float
     recall: float
     additional_selected_count: int | None
+    additional_captured_positive_count: int | None
     additional_capacity: float | None
     additional_recall: float | None
 
@@ -1293,6 +1294,12 @@ def compare_capacity_levels(
                 None
                 if previous is None
                 else metrics.selected_count - previous.selected_count
+            ),
+            additional_captured_positive_count=(
+                None
+                if previous is None
+                else metrics.captured_positive_count
+                - previous.captured_positive_count
             ),
             additional_capacity=(
                 None if previous is None else capacity - previous.capacity

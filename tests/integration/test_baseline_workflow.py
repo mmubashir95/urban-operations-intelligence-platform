@@ -23,7 +23,9 @@ from urban_ops.models.baseline_workflow import (
     _write_phase_4_5_outputs,
     _write_phase_4_6_outputs,
     _write_phase_4_7_outputs,
+    _verify_capacity_comparison_population,
     _write_phase_5_4_outputs,
+    _write_phase_5_5_figures,
     _write_phase_5_5_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
@@ -1079,6 +1081,7 @@ def test_phase_5_5_outputs_create_validation_operational_figures_and_report(
     assert "Capacity vs Precision" in report
     assert "Reviewed vs Missed Complaints Captured" in report
     assert "No capacity winner is selected" in report
+    assert "- 10% to 20%: 2 additional reviews capture 1 additional misses" in report
     assert (phase_report_dir / paths[-1].name).read_text(encoding="utf-8") == report
 
     test_labeled = comparison.copy()
@@ -1088,4 +1091,119 @@ def test_phase_5_5_outputs_create_validation_operational_figures_and_report(
             test_labeled,
             validation_sample_count=len(labels),
             validation_positive_count=sum(labels),
+        )
+
+
+def _phase_5_5_comparison() -> pd.DataFrame:
+    """Return a small validation comparison with K = 1, 2, 4 of 20 rows."""
+    labels = [1, 0, 1, 0, 1, 0, 0, 1, 0, 0] * 2
+    scores = [1.0 - index / 20 for index in range(20)]
+    return build_logistic_validation_capacity_comparison_table(
+        compare_capacity_levels(labels, scores)
+    )
+
+
+def _redirect_phase_5_5_figures(tmp_path, monkeypatch) -> None:
+    """Point Phase 5.5 figure directories at a temporary project."""
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.FIGURES_DIR",
+        tmp_path / "reports/12_baseline_modelling/figures",
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_FIGURES_DIR",
+        tmp_path / "reports/figures",
+    )
+
+
+def test_phase_5_5_figures_plot_the_comparison_table_values(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Each figure draws exactly the Phase 5.4 columns it is named after."""
+    from matplotlib.figure import Figure
+
+    comparison = _phase_5_5_comparison()
+    _redirect_phase_5_5_figures(tmp_path, monkeypatch)
+    drawn: dict[str, dict[str, object]] = {}
+    original_savefig = Figure.savefig
+
+    def recording_savefig(self, path, *args, **kwargs):
+        axis = self.axes[0]
+        (line,) = axis.get_lines()
+        drawn[path.name] = {
+            "x": [float(value) for value in line.get_xdata()],
+            "y": [float(value) for value in line.get_ydata()],
+            "xlabel": axis.get_xlabel(),
+            "ylabel": axis.get_ylabel(),
+            "annotations": [text.get_text() for text in axis.texts],
+        }
+        return original_savefig(self, path, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", recording_savefig)
+
+    _write_phase_5_5_figures(comparison)
+
+    recall = drawn["logistic_regression_validation_capacity_vs_recall.png"]
+    assert recall["x"] == [5.0, 10.0, 20.0]
+    assert recall["y"] == comparison["recall_at_k"].tolist()
+    assert recall["ylabel"] == "Recall@K (%)"
+    precision = drawn["logistic_regression_validation_capacity_vs_precision.png"]
+    assert precision["x"] == [5.0, 10.0, 20.0]
+    assert precision["y"] == comparison["precision_at_k"].tolist()
+    assert precision["ylabel"] == "Precision@K (%)"
+    captured = drawn["logistic_regression_validation_reviewed_vs_captured_misses.png"]
+    assert captured["x"] == [1.0, 2.0, 4.0]
+    assert captured["y"] == [1.0, 1.0, 2.0]
+    assert captured["xlabel"] == "Number of complaints reviewed"
+    assert captured["annotations"] == [
+        "5% capacity",
+        "10% capacity",
+        "20% capacity",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda table: table.drop(columns="captured_positive_count"), "missing"),
+        (lambda table: table.iloc[:2], "capacities 0.05, 0.10, and 0.20"),
+    ],
+)
+def test_phase_5_5_figures_reject_incomplete_plot_data(
+    tmp_path,
+    monkeypatch,
+    mutate,
+    message: str,
+) -> None:
+    """Plotting fails before drawing when its source table is incomplete."""
+    _redirect_phase_5_5_figures(tmp_path, monkeypatch)
+
+    with pytest.raises(EvaluationError, match=message):
+        _write_phase_5_5_figures(mutate(_phase_5_5_comparison()))
+    assert not (tmp_path / "reports").exists()
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "positive_count", "message"),
+    [
+        ("captured_positive_count", 2, 8, "within the selected count"),
+        ("captured_positive_count", 1, 0, "exceed validation positives"),
+        ("precision_at_k", 0.9, 8, "precision does not match captured"),
+    ],
+)
+def test_capacity_population_check_rejects_inconsistent_captured_counts(
+    column: str,
+    value: float,
+    positive_count: int,
+    message: str,
+) -> None:
+    """Captured counts must bound and reproduce the persisted precision."""
+    comparison = _phase_5_5_comparison()
+    comparison.loc[0, column] = value
+
+    with pytest.raises(EvaluationError, match=message):
+        _verify_capacity_comparison_population(
+            comparison,
+            sample_count=20,
+            positive_count=positive_count,
         )
