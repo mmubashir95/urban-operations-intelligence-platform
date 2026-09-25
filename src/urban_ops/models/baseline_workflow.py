@@ -165,6 +165,7 @@ class BaselineWorkflowResult:
     threshold_tradeoff_figure_paths: tuple[Path, ...]
     capacity_comparison_artifact_paths: tuple[Path, Path]
     top_k_visualization_artifact_paths: tuple[Path, ...]
+    operational_interpretation_report_path: Path
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
     selected_model_name: str
@@ -1893,6 +1894,146 @@ Plot data source:
     return (*figure_paths, root_report_path)
 
 
+def format_capacity_interpretation(
+    row: object,
+    *,
+    split_name: str = "validation",
+) -> str:
+    """Translate one already-computed capacity row into plain operational language.
+
+    ``row`` is one row of the Phase 5.4 capacity comparison table (for example
+    from ``DataFrame.itertuples``). Nothing is ranked or recalculated here: the
+    reviewed count, captured misses, Recall@K, and Precision@K are only
+    formatted. Wording describes what the review queue contains, never what an
+    intervention would prevent, because the evaluation does not measure that.
+    """
+    capacity_pct = f"{row.capacity_pct:.0f}%"
+    selected = int(row.selected_count)
+    captured = int(row.captured_positive_count)
+    per_hundred = round(row.precision_at_k * 100)
+    return f"""### {capacity_pct} capacity
+
+On the {split_name} set, the highest-risk {capacity_pct} of complaints forms a
+review queue of {selected:,} complaints.
+
+- **Operational workload:** the team reviews the {selected:,} highest-risk
+  complaints.
+- **Missed-target complaints captured:** {captured:,} actual missed-target
+  complaints fall within this review queue.
+- **Coverage (Recall@K):** the queue contains {row.recall_at_k:.1%} of all actual
+  missed-target complaints in the {split_name} set.
+- **Review concentration (Precision@K):** {row.precision_at_k:.1%} of reviewed
+  complaints are actual missed-target cases, roughly {per_hundred} out of every
+  100 in the queue. The others did not miss their target under the target
+  label."""
+
+
+def format_capacity_step_interpretation(previous: object, current: object) -> str:
+    """Describe the change between two adjacent, already-computed capacity rows.
+
+    Workload, captured-miss, and recall increments are read from the Phase 5.4
+    incremental columns. The recall increase is an absolute percentage-point
+    change, not a relative improvement.
+    """
+    return (
+        f"### {previous.capacity_pct:.0f}% → {current.capacity_pct:.0f}%\n\n"
+        f"Moving from {previous.capacity_pct:.0f}% to {current.capacity_pct:.0f}% "
+        f"capacity requires reviewing {int(current.additional_selected_count):,} "
+        f"additional complaints and adds "
+        f"{int(current.additional_captured_positive_count):,} actual "
+        f"missed-target complaints to the review queue. Recall@K increases by "
+        f"{current.additional_recall_pct_points:.2f} percentage points "
+        f"({previous.recall_at_k:.1%} to {current.recall_at_k:.1%}), and "
+        f"Precision@K moves from {previous.precision_at_k:.1%} to "
+        f"{current.precision_at_k:.1%}."
+    )
+
+
+def _write_phase_5_6_outputs(
+    results: pd.DataFrame,
+    *,
+    validation_sample_count: int,
+    validation_positive_count: int,
+) -> Path:
+    """Write the Phase 5.6 plain-language validation capacity interpretation."""
+    if results["evaluated_split"].tolist() != ["validation"] * len(results):
+        raise EvaluationError("Phase 5.6 interpretation must use validation.")
+    if results["capacity"].tolist() != list(TOP_K_CAPACITIES):
+        raise EvaluationError("Phase 5.6 requires capacities 0.05, 0.10, and 0.20.")
+    _verify_capacity_comparison_population(
+        results,
+        sample_count=validation_sample_count,
+        positive_count=validation_positive_count,
+    )
+    rows = list(results.itertuples(index=False))
+    capacity_sections = "\n\n".join(
+        format_capacity_interpretation(row) for row in rows
+    )
+    step_sections = "\n\n".join(
+        format_capacity_step_interpretation(previous, current)
+        for previous, current in zip(rows, rows[1:])
+    )
+    figure_names = [path.name for path in _phase_5_5_figure_paths()]
+    report_filename = "phase_5_6_operational_interpretation.md"
+    report = f"""# Phase 5.6 — Operational Interpretation
+
+## Purpose
+
+If the city team can investigate the highest-risk X% of complaints, how many
+actual missed-target complaints would that review queue contain? This phase
+answers that question in plain language for the fixed 5%, 10%, and 20%
+capacities, using the Phase 5.4 capacity comparison without recalculating it.
+
+## Evaluation Context
+
+- **Split:** `validation` ({validation_sample_count:,} complaints, of which
+  {validation_positive_count:,} actually missed their resolution target).
+- **Ranking:** complaints are ordered by the continuous Logistic Regression
+  missed-target risk score, highest first. The review queue at each capacity is
+  the top `ceil(n × capacity)` complaints in that order.
+- **Not a threshold rule:** queue membership comes from rank position, not from
+  the frozen `0.49` classification threshold.
+
+## Capacity Interpretations
+
+{capacity_sections}
+
+## Adjacent Capacity Changes
+
+{step_sections}
+
+The same values are shown in the Phase 5.5 figures: Capacity vs Recall
+(`reports/figures/{figure_names[0]}`), Capacity vs Precision
+(`reports/figures/{figure_names[1]}`), and Reviewed vs Missed Complaints Captured
+(`reports/figures/{figure_names[2]}`).
+
+## Important Limitations
+
+These results describe ranking performance on the validation split. They show
+which actual missed-target complaints are concentrated within the highest-risk
+review queues. They do not measure whether reviewing or intervening on those
+complaints would prevent them from missing their resolution target. Validation
+results may not carry over unchanged to future complaints.
+
+## No Capacity Recommendation
+
+No preferred operational capacity is selected in this phase, and no capacity
+is frozen. The test split is not used to choose or recommend a capacity.
+Choosing a capacity would need operational inputs that are not part of this
+evaluation, such as staffing capacity, cost per review, minimum required
+recall, daily complaint volume, and intervention effectiveness.
+
+Source table:
+`reports/tables/logistic_regression_validation_capacity_comparison.csv`
+"""
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    root_report_path = PROJECT_ROOT / "reports" / report_filename
+    root_report_path.parent.mkdir(parents=True, exist_ok=True)
+    (BASELINE_REPORT_DIR / report_filename).write_text(report, encoding="utf-8")
+    root_report_path.write_text(report, encoding="utf-8")
+    return root_report_path
+
+
 def _write_phase_4_3_outputs(results: pd.DataFrame) -> None:
     """Write Phase 4.3's deterministic validation-only threshold sweep."""
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
@@ -3055,6 +3196,11 @@ def run_baseline_workflow(
         validation_sample_count=len(inputs.targets["validation"]),
         validation_positive_count=int(inputs.targets["validation"].sum()),
     )
+    operational_interpretation_report_path = _write_phase_5_6_outputs(
+        logistic_validation_capacity_comparison,
+        validation_sample_count=len(inputs.targets["validation"]),
+        validation_positive_count=int(inputs.targets["validation"].sum()),
+    )
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -3107,6 +3253,9 @@ def run_baseline_workflow(
         threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         capacity_comparison_artifact_paths=capacity_comparison_artifact_paths,
         top_k_visualization_artifact_paths=top_k_visualization_artifact_paths,
+        operational_interpretation_report_path=(
+            operational_interpretation_report_path
+        ),
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,
         selected_model_name=selected_model_name,

@@ -27,6 +27,7 @@ from urban_ops.models.baseline_workflow import (
     _write_phase_5_4_outputs,
     _write_phase_5_5_figures,
     _write_phase_5_5_outputs,
+    _write_phase_5_6_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
     build_logistic_validation_policy_table,
@@ -1206,4 +1207,80 @@ def test_capacity_population_check_rejects_inconsistent_captured_counts(
             comparison,
             sample_count=20,
             positive_count=positive_count,
+        )
+
+
+def test_phase_5_6_report_interprets_validation_table_without_overclaiming(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The Phase 5.6 report restates Phase 5.4 values in operational language."""
+    labels = [1, 0, 1, 0, 1, 0, 0, 1, 0, 0] * 2
+    comparison = _phase_5_5_comparison()
+    project_root = tmp_path / "project"
+    phase_report_dir = project_root / "reports/12_baseline_modelling"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        phase_report_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+    population = {
+        "validation_sample_count": len(labels),
+        "validation_positive_count": sum(labels),
+    }
+
+    path = _write_phase_5_6_outputs(comparison, **population)
+    first_bytes = path.read_bytes()
+    repeated_path = _write_phase_5_6_outputs(comparison, **population)
+
+    assert path == project_root / "reports/phase_5_6_operational_interpretation.md"
+    assert repeated_path == path
+    assert path.read_bytes() == first_bytes
+    assert (phase_report_dir / path.name).read_bytes() == first_bytes
+    report = first_bytes.decode("utf-8")
+    flat = " ".join(report.split())
+    for heading in (
+        "## Purpose",
+        "## Evaluation Context",
+        "## Capacity Interpretations",
+        "### 5% capacity",
+        "### 10% capacity",
+        "### 20% capacity",
+        "### 5% → 10%",
+        "### 10% → 20%",
+        "## Important Limitations",
+        "## No Capacity Recommendation",
+    ):
+        assert heading in report
+    assert report.index("### 5% capacity") < report.index("### 10% capacity")
+    assert report.index("### 10% capacity") < report.index("### 20% capacity")
+    for row in comparison.itertuples(index=False):
+        assert f"reviews the {row.selected_count} highest-risk" in flat
+        assert f"{row.captured_positive_count} actual missed-target complaints fall" in flat
+        assert f"contains {row.recall_at_k:.1%} of all actual" in flat
+        assert f"{row.precision_at_k:.1%} of reviewed complaints" in flat
+    assert "`validation` (20 complaints, of which 8" in flat
+    assert "increases by 0.00 percentage points" in flat
+    assert "increases by 12.50 percentage points" in flat
+    assert "not from the frozen `0.49` classification threshold" in flat
+    assert "do not measure whether reviewing or intervening" in flat
+    assert "No preferred operational capacity is selected" in flat
+
+    before_limitations = report.split("## Important Limitations")[0].lower()
+    for phrase in ("prevent", "saved", "avoided", "optimal", "best capacity"):
+        assert phrase not in before_limitations
+    assert "should review" not in report.lower()
+
+    test_labeled = comparison.copy()
+    test_labeled["evaluated_split"] = "test"
+    with pytest.raises(EvaluationError, match="must use validation"):
+        _write_phase_5_6_outputs(test_labeled, **population)
+    with pytest.raises(EvaluationError, match="selected counts do not match"):
+        _write_phase_5_6_outputs(
+            comparison,
+            validation_sample_count=30,
+            validation_positive_count=8,
         )
