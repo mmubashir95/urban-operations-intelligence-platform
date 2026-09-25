@@ -164,6 +164,7 @@ class BaselineWorkflowResult:
     frozen_threshold_generalization_results: pd.DataFrame
     threshold_tradeoff_figure_paths: tuple[Path, ...]
     capacity_comparison_artifact_paths: tuple[Path, Path]
+    top_k_visualization_artifact_paths: tuple[Path, ...]
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
     selected_model_name: str
@@ -881,6 +882,7 @@ def build_logistic_validation_capacity_comparison_table(
                 "capacity": result.capacity,
                 "capacity_pct": result.capacity * 100.0,
                 "selected_count": result.selected_count,
+                "captured_positive_count": result.captured_positive_count,
                 "precision_at_k": result.precision,
                 "recall_at_k": result.recall,
                 "additional_selected_count": result.additional_selected_count,
@@ -1550,10 +1552,24 @@ def _verify_capacity_comparison_population(
             "Phase 5.4 selected counts do not match the validation population."
         )
     for row in results.itertuples(index=False):
-        selected_positive = round(row.precision_at_k * row.selected_count)
+        if not 0 <= row.captured_positive_count <= row.selected_count:
+            raise EvaluationError(
+                "Phase 5.4 captured positives must be within the selected count."
+            )
+        if row.captured_positive_count > positive_count:
+            raise EvaluationError(
+                "Phase 5.4 captured positives exceed validation positives."
+            )
+        expected_precision = row.captured_positive_count / row.selected_count
         expected_recall = (
-            selected_positive / positive_count if positive_count else 0.0
+            row.captured_positive_count / positive_count if positive_count else 0.0
         )
+        if not math.isclose(
+            row.precision_at_k, expected_precision, rel_tol=0.0, abs_tol=1e-12
+        ):
+            raise EvaluationError(
+                "Phase 5.4 precision does not match captured positives."
+            )
         if not math.isclose(
             row.recall_at_k, expected_recall, rel_tol=0.0, abs_tol=1e-12
         ):
@@ -1686,6 +1702,175 @@ Machine-readable artifact:
     phase_report_path.write_text(report, encoding="utf-8")
     root_report_path.write_text(report, encoding="utf-8")
     return ROOT_TABLES_DIR / filename, root_report_path
+
+
+def _phase_5_5_figure_paths() -> tuple[Path, ...]:
+    """Return deterministic Phase 5.5 figure artifact paths."""
+    filenames = (
+        "logistic_regression_validation_capacity_vs_recall.png",
+        "logistic_regression_validation_capacity_vs_precision.png",
+        "logistic_regression_validation_reviewed_vs_captured_misses.png",
+    )
+    return tuple(ROOT_FIGURES_DIR / filename for filename in filenames)
+
+
+def _write_phase_5_5_figures(results: pd.DataFrame) -> tuple[Path, ...]:
+    """Plot operational views from already-computed Phase 5.4 results."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    required = {
+        "capacity_pct",
+        "selected_count",
+        "precision_at_k",
+        "recall_at_k",
+        "captured_positive_count",
+    }
+    missing = sorted(required.difference(results.columns))
+    if missing:
+        raise EvaluationError(
+            "Phase 5.5 plot data is missing required columns: " + ", ".join(missing)
+        )
+    data = results.sort_values("capacity", kind="mergesort").reset_index(drop=True)
+    if data["capacity"].tolist() != list(TOP_K_CAPACITIES):
+        raise EvaluationError("Phase 5.5 requires capacities 0.05, 0.10, and 0.20.")
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
+    recall_figure, recall_axis = plt.subplots(figsize=(7, 5), dpi=150)
+    recall_axis.plot(data["capacity_pct"], data["recall_at_k"], marker="o")
+    recall_axis.set_xlabel("Operational capacity (%)")
+    recall_axis.set_ylabel("Recall@K")
+    recall_axis.set_title("Validation Recall by Operational Capacity")
+    recall_axis.set_xticks(data["capacity_pct"])
+    recall_axis.set_ylim(0, 1)
+    recall_figure.tight_layout()
+
+    precision_figure, precision_axis = plt.subplots(figsize=(7, 5), dpi=150)
+    precision_axis.plot(
+        data["capacity_pct"], data["precision_at_k"], marker="o", color="C1"
+    )
+    precision_axis.set_xlabel("Operational capacity (%)")
+    precision_axis.set_ylabel("Precision@K")
+    precision_axis.set_title("Validation Precision by Operational Capacity")
+    precision_axis.set_xticks(data["capacity_pct"])
+    precision_axis.set_ylim(0, 1)
+    precision_figure.tight_layout()
+
+    captured_figure, captured_axis = plt.subplots(figsize=(7, 5), dpi=150)
+    captured_axis.plot(
+        data["selected_count"],
+        data["captured_positive_count"],
+        marker="o",
+        color="C2",
+    )
+    captured_axis.set_xlabel("Number of complaints reviewed")
+    captured_axis.set_ylabel("Actual missed-target complaints captured")
+    captured_axis.set_title(
+        "Missed-Target Complaints Captured by Review Workload"
+    )
+    captured_axis.set_xticks(data["selected_count"])
+    captured_axis.set_ylim(bottom=0)
+    captured_figure.tight_layout()
+
+    artifacts = (
+        (recall_figure, _phase_5_5_figure_paths()[0].name),
+        (precision_figure, _phase_5_5_figure_paths()[1].name),
+        (captured_figure, _phase_5_5_figure_paths()[2].name),
+    )
+    for directory in (FIGURES_DIR, ROOT_FIGURES_DIR):
+        for figure, filename in artifacts:
+            figure.savefig(directory / filename)
+    for figure, _ in artifacts:
+        plt.close(figure)
+    return _phase_5_5_figure_paths()
+
+
+def _format_phase_5_5_table(results: pd.DataFrame) -> str:
+    """Render the compact operational table used by the Phase 5.5 report."""
+    lines = [
+        "| Capacity | Reviewed | Precision@K | Recall@K | Misses captured |",
+        "| ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in results.itertuples(index=False):
+        lines.append(
+            f"| {row.capacity_pct:.0f}% | {int(row.selected_count):,} | "
+            f"{row.precision_at_k:.4f} | {row.recall_at_k:.4f} | "
+            f"{int(row.captured_positive_count):,} |"
+        )
+    return "\n".join(lines)
+
+
+def _write_phase_5_5_outputs(
+    results: pd.DataFrame,
+    *,
+    validation_sample_count: int,
+    validation_positive_count: int,
+) -> tuple[Path, ...]:
+    """Write Phase 5.5 validation figures and their concise report."""
+    if results["evaluated_split"].tolist() != ["validation"] * len(results):
+        raise EvaluationError("Phase 5.5 visualizations must use validation.")
+    _verify_capacity_comparison_population(
+        results,
+        sample_count=validation_sample_count,
+        positive_count=validation_positive_count,
+    )
+    figure_paths = _write_phase_5_5_figures(results)
+    rows = list(results.itertuples(index=False))
+    steps = "\n".join(
+        f"- {rows[index - 1].capacity_pct:.0f}% to {row.capacity_pct:.0f}%: "
+        f"{int(row.additional_selected_count):,} additional reviews capture "
+        f"{int(row.captured_positive_count - rows[index - 1].captured_positive_count):,} "
+        f"additional misses; Recall@K changes by "
+        f"{row.additional_recall_pct_points:+.2f} percentage points and "
+        f"Precision@K moves from {rows[index - 1].precision_at_k:.4f} to "
+        f"{row.precision_at_k:.4f}."
+        for index, row in enumerate(rows[1:], start=1)
+    )
+    report_filename = "phase_5_5_top_k_visualization.md"
+    report = f"""# Phase 5.5 — Top-K Operational Visualizations
+
+## Purpose
+
+This phase visualizes the approved Phase 5.4 validation capacity comparison. It
+does not recompute ranking metrics, select a capacity winner, or freeze a policy.
+
+## Source Split and Capacity Table
+
+All values use the `validation` split and the fixed 5%, 10%, and 20% capacities.
+
+{_format_phase_5_5_table(results)}
+
+## Figures
+
+1. Capacity vs Recall: `reports/figures/{figure_paths[0].name}`
+2. Capacity vs Precision: `reports/figures/{figure_paths[1].name}`
+3. Reviewed vs Missed Complaints Captured: `reports/figures/{figure_paths[2].name}`
+
+## Operational Interpretation
+
+{steps}
+
+## Scope Limitation
+
+No capacity winner is selected. The test split is not used for capacity
+selection or recommendation, and the frozen `0.49` classification threshold is
+not used for Top-K membership. This phase adds no lift, cost-benefit, staffing,
+absolute-K, model-training, feature, or test-tuning logic.
+
+Plot data source:
+`reports/tables/logistic_regression_validation_capacity_comparison.csv`
+"""
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    root_report_path = PROJECT_ROOT / "reports" / report_filename
+    phase_report_path = BASELINE_REPORT_DIR / report_filename
+    root_report_path.parent.mkdir(parents=True, exist_ok=True)
+    phase_report_path.write_text(report, encoding="utf-8")
+    root_report_path.write_text(report, encoding="utf-8")
+    return (*figure_paths, root_report_path)
 
 
 def _write_phase_4_3_outputs(results: pd.DataFrame) -> None:
@@ -2845,6 +3030,11 @@ def run_baseline_workflow(
         validation_sample_count=len(inputs.targets["validation"]),
         validation_positive_count=int(inputs.targets["validation"].sum()),
     )
+    top_k_visualization_artifact_paths = _write_phase_5_5_outputs(
+        logistic_validation_capacity_comparison,
+        validation_sample_count=len(inputs.targets["validation"]),
+        validation_positive_count=int(inputs.targets["validation"].sum()),
+    )
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -2896,6 +3086,7 @@ def run_baseline_workflow(
         ),
         threshold_tradeoff_figure_paths=threshold_tradeoff_figure_paths,
         capacity_comparison_artifact_paths=capacity_comparison_artifact_paths,
+        top_k_visualization_artifact_paths=top_k_visualization_artifact_paths,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,
         selected_model_name=selected_model_name,

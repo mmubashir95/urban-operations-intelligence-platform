@@ -24,6 +24,7 @@ from urban_ops.models.baseline_workflow import (
     _write_phase_4_6_outputs,
     _write_phase_4_7_outputs,
     _write_phase_5_4_outputs,
+    _write_phase_5_5_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
     build_logistic_validation_policy_table,
@@ -949,6 +950,7 @@ def test_phase_5_4_outputs_are_validation_only_deterministic_and_preserve_phase_
     assert persisted["evaluated_split"].tolist() == ["validation"] * 3
     assert persisted["capacity"].tolist() == [0.05, 0.10, 0.20]
     assert persisted["selected_count"].tolist() == [1, 2, 4]
+    assert persisted["captured_positive_count"].tolist() == [1, 1, 2]
     assert (phase_report_dir / "tables" / first_paths[0].name).read_bytes() == first_csv
     phase_report = phase_report_dir / "phase_5_4_capacity_comparison.md"
     assert phase_report.read_bytes() == first_report
@@ -1017,3 +1019,73 @@ def test_phase_5_4_outputs_reject_comparison_from_another_population(
             validation_positive_count=positive_count,
         )
     assert not (project_root / "reports").exists()
+
+
+def test_phase_5_5_outputs_create_validation_operational_figures_and_report(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Phase 5.5 renders three distinct views from Phase 5.4 rows only."""
+    labels = [1, 0, 1, 0, 1, 0, 0, 1, 0, 0] * 2
+    scores = [1.0 - index / 20 for index in range(20)]
+    comparison = build_logistic_validation_capacity_comparison_table(
+        compare_capacity_levels(labels, scores)
+    )
+    project_root = tmp_path / "project"
+    phase_report_dir = project_root / "reports/12_baseline_modelling"
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.BASELINE_REPORT_DIR",
+        phase_report_dir,
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.FIGURES_DIR",
+        phase_report_dir / "figures",
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.ROOT_FIGURES_DIR",
+        project_root / "reports/figures",
+    )
+    monkeypatch.setattr(
+        "urban_ops.models.baseline_workflow.PROJECT_ROOT",
+        project_root,
+    )
+
+    paths = _write_phase_5_5_outputs(
+        comparison,
+        validation_sample_count=len(labels),
+        validation_positive_count=sum(labels),
+    )
+    repeated_paths = _write_phase_5_5_outputs(
+        comparison,
+        validation_sample_count=len(labels),
+        validation_positive_count=sum(labels),
+    )
+
+    expected_names = [
+        "logistic_regression_validation_capacity_vs_recall.png",
+        "logistic_regression_validation_capacity_vs_precision.png",
+        "logistic_regression_validation_reviewed_vs_captured_misses.png",
+        "phase_5_5_top_k_visualization.md",
+    ]
+    assert [path.name for path in paths] == expected_names
+    assert paths == repeated_paths
+    assert all(path.is_file() and path.stat().st_size > 0 for path in paths)
+    for figure_path in paths[:3]:
+        compatibility = phase_report_dir / "figures" / figure_path.name
+        assert compatibility.is_file() and compatibility.stat().st_size > 0
+    report = paths[-1].read_text(encoding="utf-8")
+    assert "All values use the `validation` split" in report
+    assert "Capacity vs Recall" in report
+    assert "Capacity vs Precision" in report
+    assert "Reviewed vs Missed Complaints Captured" in report
+    assert "No capacity winner is selected" in report
+    assert (phase_report_dir / paths[-1].name).read_text(encoding="utf-8") == report
+
+    test_labeled = comparison.copy()
+    test_labeled["evaluated_split"] = "test"
+    with pytest.raises(EvaluationError, match="must use validation"):
+        _write_phase_5_5_outputs(
+            test_labeled,
+            validation_sample_count=len(labels),
+            validation_positive_count=sum(labels),
+        )

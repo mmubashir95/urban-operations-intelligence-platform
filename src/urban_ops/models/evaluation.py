@@ -124,6 +124,7 @@ class CapacityComparisonRow:
 
     capacity: float
     selected_count: int
+    captured_positive_count: int
     precision: float
     recall: float
     additional_selected_count: int | None
@@ -141,6 +142,7 @@ class TopKMetrics:
 
     fraction: float
     selected_count: int
+    captured_positive_count: int
     precision: float
     recall: float
 
@@ -1230,6 +1232,7 @@ def _top_k_metrics_from_ranking(
     return TopKMetrics(
         fraction=float(capacity),
         selected_count=len(selected),
+        captured_positive_count=selected_positive,
         precision=float(selected_positive / len(selected)),
         recall=(
             float(selected_positive / total_positive) if total_positive else 0.0
@@ -1283,6 +1286,7 @@ def compare_capacity_levels(
         row = CapacityComparisonRow(
             capacity=capacity,
             selected_count=metrics.selected_count,
+            captured_positive_count=metrics.captured_positive_count,
             precision=metrics.precision,
             recall=metrics.recall,
             additional_selected_count=(
