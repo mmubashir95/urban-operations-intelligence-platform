@@ -166,6 +166,8 @@ class BaselineWorkflowResult:
     capacity_comparison_artifact_paths: tuple[Path, Path]
     top_k_visualization_artifact_paths: tuple[Path, ...]
     operational_interpretation_report_path: Path
+    logistic_test_operational_top_k: pd.DataFrame
+    final_operational_test_artifact_paths: tuple[Path, Path]
     roc_curve_results: pd.DataFrame
     pr_curve_results: pd.DataFrame
     selected_model_name: str
@@ -875,11 +877,26 @@ def build_logistic_validation_capacity_comparison_table(
     results: tuple[CapacityComparisonRow, ...],
 ) -> pd.DataFrame:
     """Build the Phase 5.4 validation capacity comparison table."""
+    return build_logistic_capacity_comparison_table(
+        results, evaluated_split="validation"
+    )
+
+
+def build_logistic_capacity_comparison_table(
+    results: tuple[CapacityComparisonRow, ...],
+    *,
+    evaluated_split: str,
+) -> pd.DataFrame:
+    """Build a Logistic Regression capacity comparison table for one split.
+
+    Phase 5.4 uses validation; Phase 5.7 applies the same frozen columns to the
+    final test split. The caller is responsible for passing that split's rows.
+    """
     table = pd.DataFrame(
         [
             {
                 "model": "Logistic Regression",
-                "evaluated_split": "validation",
+                "evaluated_split": evaluated_split,
                 "capacity": result.capacity,
                 "capacity_pct": result.capacity * 100.0,
                 "selected_count": result.selected_count,
@@ -1539,29 +1556,33 @@ def _verify_capacity_comparison_population(
     *,
     sample_count: int,
     positive_count: int,
+    population_name: str = "validation",
 ) -> None:
-    """Reject a comparison whose K values or recall denominator are not validation's.
+    """Reject a comparison whose K values or recall denominator are not the split's.
 
     The table's ``evaluated_split`` label is set by its builder, so it cannot
     detect scores from another split. Each ``K`` must instead equal
-    ``ceil(sample_count × capacity)`` and each recall must use the validation
-    positive count, which ties the persisted evidence to the validation rows.
+    ``ceil(sample_count × capacity)`` and each recall must use the split's
+    positive count, which ties the persisted evidence to that split's rows.
+    ``population_name`` (validation by default) only labels error messages.
     """
     expected_k = [
         level.k for level in get_standard_capacity_levels(sample_count)
     ]
     if results["selected_count"].astype(int).tolist() != expected_k:
         raise EvaluationError(
-            "Phase 5.4 selected counts do not match the validation population."
+            f"Capacity comparison selected counts do not match the {population_name} "
+            "population."
         )
     for row in results.itertuples(index=False):
         if not 0 <= row.captured_positive_count <= row.selected_count:
             raise EvaluationError(
-                "Phase 5.4 captured positives must be within the selected count."
+                "Capacity comparison captured positives must be within the selected count."
             )
         if row.captured_positive_count > positive_count:
             raise EvaluationError(
-                "Phase 5.4 captured positives exceed validation positives."
+                f"Capacity comparison captured positives exceed {population_name} "
+                "positives."
             )
         expected_precision = row.captured_positive_count / row.selected_count
         expected_recall = (
@@ -1571,13 +1592,14 @@ def _verify_capacity_comparison_population(
             row.precision_at_k, expected_precision, rel_tol=0.0, abs_tol=1e-12
         ):
             raise EvaluationError(
-                "Phase 5.4 precision does not match captured positives."
+                "Capacity comparison precision does not match captured positives."
             )
         if not math.isclose(
             row.recall_at_k, expected_recall, rel_tol=0.0, abs_tol=1e-12
         ):
             raise EvaluationError(
-                "Phase 5.4 recall does not match the validation positive count."
+                f"Capacity comparison recall does not match the {population_name} "
+                "positive count."
             )
 
 
@@ -2032,6 +2054,209 @@ Source table:
     (BASELINE_REPORT_DIR / report_filename).write_text(report, encoding="utf-8")
     root_report_path.write_text(report, encoding="utf-8")
     return root_report_path
+
+
+def _verify_test_top_k_matches_final_test_metrics(
+    test_table: pd.DataFrame,
+    final_test_results: pd.DataFrame,
+) -> None:
+    """Require Phase 5.7 to agree with the existing final test Top-K metrics.
+
+    The Month 1 final test row already stores Precision@K and Recall@K for the
+    selected Logistic Regression model. Phase 5.7 must restate that single
+    final evaluation, not introduce a second, competing test result.
+    """
+    matches = final_test_results.loc[
+        final_test_results["model"].eq("Logistic Regression")
+        & final_test_results["evaluated_split"].eq("test")
+    ]
+    if len(matches) != 1:
+        raise EvaluationError(
+            "Phase 5.7 requires exactly one final Logistic Regression test row."
+        )
+    final_row = matches.iloc[0]
+    for row in test_table.itertuples(index=False):
+        suffix = f"at_{round(row.capacity * 100)}_percent"
+        for metric, value in (
+            ("precision", row.precision_at_k),
+            ("recall", row.recall_at_k),
+        ):
+            if not math.isclose(
+                value, final_row[f"{metric}_{suffix}"], rel_tol=0.0, abs_tol=1e-12
+            ):
+                raise EvaluationError(
+                    f"Phase 5.7 test {metric} at {row.capacity_pct:.0f}% does not "
+                    "match the final test evaluation."
+                )
+
+
+def _describe_difference(test_value: float, validation_value: float) -> str:
+    """Describe a test-minus-validation rate difference in percentage points."""
+    difference = (test_value - validation_value) * 100.0
+    if math.isclose(difference, 0.0, abs_tol=0.005):
+        return "equal to validation (within 0.01 percentage points)"
+    direction = "above" if difference > 0 else "below"
+    return f"{abs(difference):.2f} percentage points {direction} validation"
+
+
+def _format_phase_5_7_comparison_table(
+    validation: pd.DataFrame,
+    test: pd.DataFrame,
+) -> str:
+    """Render fixed-capacity validation and test Precision@K and Recall@K."""
+    lines = [
+        "| Capacity | Validation Precision@K | Test Precision@K | "
+        "Validation Recall@K | Test Recall@K |",
+        "| ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for validation_row, test_row in zip(
+        validation.itertuples(index=False), test.itertuples(index=False)
+    ):
+        lines.append(
+            f"| {test_row.capacity_pct:.0f}% | {validation_row.precision_at_k:.2%} | "
+            f"{test_row.precision_at_k:.2%} | {validation_row.recall_at_k:.2%} | "
+            f"{test_row.recall_at_k:.2%} |"
+        )
+    return "\n".join(lines)
+
+
+def _write_phase_5_7_outputs(
+    test_table: pd.DataFrame,
+    validation_table: pd.DataFrame,
+    *,
+    test_sample_count: int,
+    test_positive_count: int,
+    validation_sample_count: int,
+    validation_positive_count: int,
+    final_test_results: pd.DataFrame,
+) -> tuple[Path, Path]:
+    """Write the final, untuned test operational Top-K table and report.
+
+    The test table must come from the frozen train-fitted Logistic Regression
+    scores ranked with the same fixed capacities as validation. Nothing here
+    chooses, tunes, or compares alternatives; test is final evidence only.
+    """
+    if test_table["evaluated_split"].tolist() != ["test"] * len(test_table):
+        raise EvaluationError("Phase 5.7 final evaluation must use the test split.")
+    if validation_table["evaluated_split"].tolist() != ["validation"] * len(
+        validation_table
+    ):
+        raise EvaluationError("Phase 5.7 comparison baseline must use validation.")
+    for table in (test_table, validation_table):
+        if table["capacity"].tolist() != list(TOP_K_CAPACITIES):
+            raise EvaluationError(
+                "Phase 5.7 requires capacities 0.05, 0.10, and 0.20."
+            )
+    _verify_capacity_comparison_population(
+        test_table,
+        sample_count=test_sample_count,
+        positive_count=test_positive_count,
+        population_name="test",
+    )
+    _verify_capacity_comparison_population(
+        validation_table,
+        sample_count=validation_sample_count,
+        positive_count=validation_positive_count,
+    )
+    _verify_test_top_k_matches_final_test_metrics(test_table, final_test_results)
+
+    filename = "logistic_regression_test_operational_top_k.csv"
+    report_filename = "phase_5_7_final_operational_test_evaluation.md"
+    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT_TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    for directory in (TABLES_DIR, ROOT_TABLES_DIR):
+        test_table.to_csv(directory / filename, index=False)
+
+    test_rows = list(test_table.itertuples(index=False))
+    validation_rows = list(validation_table.itertuples(index=False))
+    capacity_sections = "\n\n".join(
+        format_capacity_interpretation(row, split_name="test") for row in test_rows
+    )
+    generalization = "\n".join(
+        f"- {test_row.capacity_pct:.0f}%: test Precision@K is "
+        f"{_describe_difference(test_row.precision_at_k, validation_row.precision_at_k)}; "
+        f"test Recall@K is "
+        f"{_describe_difference(test_row.recall_at_k, validation_row.recall_at_k)}."
+        for validation_row, test_row in zip(validation_rows, test_rows)
+    )
+    test_positive_rate = test_positive_count / test_sample_count
+    validation_positive_rate = validation_positive_count / validation_sample_count
+    report = f"""# Phase 5.7 — Final Operational Test Evaluation
+
+## Purpose
+
+This phase applies the already-fixed operational Top-K evaluation to the
+untouched test split and reports the result as final evidence. It does not
+retrain, retune, or change any part of the evaluation.
+
+## Frozen Evaluation Contract
+
+- **Model:** frozen train-fitted Logistic Regression baseline.
+- **Score:** continuous positive-class probability, `predict_proba(X)[:, 1]`,
+  where class `1` means a missed expected resolution target.
+- **Ranking:** descending risk score.
+- **Tie handling:** equal scores keep stable, deterministic input order.
+- **Capacities:** 5%, 10%, and 20%, fixed before test evaluation.
+- **K rule:** `ceil(n × capacity)`.
+- **Capacity analysis split:** validation (Phases 5.4–5.6).
+- **Final evaluation split:** test.
+- **Metrics:** selected count, captured-positive count, Precision@K, Recall@K.
+- **Test-time tuning:** none.
+- **Separate from the threshold:** Top-K membership is rank-based and does not
+  use the frozen Phase 4 `0.49` classification threshold.
+
+## Test Population
+
+The test split contains {test_sample_count:,} complaints, of which
+{test_positive_count:,} actually missed their resolution target (positive rate
+{test_positive_rate:.2%}). For context, the validation positive rate was
+{validation_positive_rate:.2%}.
+
+## Final Test Top-K Results
+
+{_format_phase_5_5_table(test_table)}
+
+## Operational Interpretation
+
+{capacity_sections}
+
+## Validation vs Test Comparison
+
+{_format_phase_5_7_comparison_table(validation_table, test_table)}
+
+## Generalization Observations
+
+{generalization}
+
+These differences are reported as observed final evidence. The test positive
+rate differs from validation, which affects Precision@K and Recall@K. The
+differences are not used to change the model, the ranking, or the capacities.
+
+## No Retuning Statement
+
+The test split was used only for final evaluation. No model retraining, feature
+changes, threshold tuning, capacity tuning, model selection, or policy changes
+were performed based on test results. No capacity is selected or recommended
+from these results. These figures describe ranking performance only; they do not
+measure whether reviewing or intervening on complaints would prevent missed
+resolution targets.
+
+## Final Phase 5 Conclusion
+
+The operational evaluation contract is frozen as documented above. On the
+untouched test split, the fixed 5%, 10%, and 20% review queues contain the
+missed-target complaint counts and rates reported in this document, and those
+values match the existing final test Top-K metrics.
+
+Machine-readable artifact:
+`reports/tables/{filename}`
+"""
+    BASELINE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    root_report_path = PROJECT_ROOT / "reports" / report_filename
+    root_report_path.parent.mkdir(parents=True, exist_ok=True)
+    (BASELINE_REPORT_DIR / report_filename).write_text(report, encoding="utf-8")
+    root_report_path.write_text(report, encoding="utf-8")
+    return ROOT_TABLES_DIR / filename, root_report_path
 
 
 def _write_phase_4_3_outputs(results: pd.DataFrame) -> None:
@@ -3201,6 +3426,21 @@ def run_baseline_workflow(
         validation_sample_count=len(inputs.targets["validation"]),
         validation_positive_count=int(inputs.targets["validation"].sum()),
     )
+    # Phase 5.7 reuses the frozen model's test scores from Phase 4.7 and the
+    # fixed capacities; nothing about the evaluation is chosen from test data.
+    logistic_test_operational_top_k = build_logistic_capacity_comparison_table(
+        compare_capacity_levels(inputs.targets["test"], logistic_test_scores),
+        evaluated_split="test",
+    )
+    final_operational_test_artifact_paths = _write_phase_5_7_outputs(
+        logistic_test_operational_top_k,
+        logistic_validation_capacity_comparison,
+        test_sample_count=len(inputs.targets["test"]),
+        test_positive_count=int(inputs.targets["test"].sum()),
+        validation_sample_count=len(inputs.targets["validation"]),
+        validation_positive_count=int(inputs.targets["validation"].sum()),
+        final_test_results=test_results,
+    )
     _write_ranking_figures(
         validation_results=validation_results,
         roc_curve_results=roc_curve_results,
@@ -3256,6 +3496,8 @@ def run_baseline_workflow(
         operational_interpretation_report_path=(
             operational_interpretation_report_path
         ),
+        logistic_test_operational_top_k=logistic_test_operational_top_k,
+        final_operational_test_artifact_paths=final_operational_test_artifact_paths,
         roc_curve_results=roc_curve_results,
         pr_curve_results=pr_curve_results,
         selected_model_name=selected_model_name,

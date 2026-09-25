@@ -28,9 +28,11 @@ from urban_ops.models.baseline_workflow import (
     _write_phase_5_5_figures,
     _write_phase_5_5_outputs,
     _write_phase_5_6_outputs,
+    _write_phase_5_7_outputs,
     _write_ranking_figures,
     _write_validation_calibration_figure,
     build_logistic_validation_policy_table,
+    build_logistic_capacity_comparison_table,
     build_logistic_validation_capacity_comparison_table,
     build_logistic_validation_threshold_table,
     build_logistic_validation_manual_threshold_table,
@@ -1283,4 +1285,141 @@ def test_phase_5_6_report_interprets_validation_table_without_overclaiming(
             comparison,
             validation_sample_count=30,
             validation_positive_count=8,
+        )
+
+
+def test_phase_5_7_reports_untuned_test_top_k_and_preserves_prior_artifacts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Phase 5.7 writes final test evidence without touching earlier decisions."""
+    from urban_ops.models.evaluation import evaluate_binary_classifier, metrics_row
+
+    validation_labels = [1, 0, 1, 0, 1, 0, 0, 1, 0, 0] * 2
+    validation = _phase_5_5_comparison()
+    test_labels = [1, 0, 0, 1, 0, 1, 0, 0] * 5
+    test_scores = [1.0 - index / 40 for index in range(40)]
+    test_table = build_logistic_capacity_comparison_table(
+        compare_capacity_levels(test_labels, test_scores),
+        evaluated_split="test",
+    )
+    final_test_results = pd.DataFrame(
+        [
+            metrics_row(
+                "Logistic Regression",
+                evaluate_binary_classifier(
+                    test_labels,
+                    [int(score >= 0.5) for score in test_scores],
+                    test_scores,
+                ),
+                evaluated_split="test",
+            )
+        ]
+    )
+    project_root = tmp_path / "project"
+    phase_report_dir = project_root / "reports/12_baseline_modelling"
+    root_tables_dir = project_root / "reports/tables"
+    for name, value in (
+        ("BASELINE_REPORT_DIR", phase_report_dir),
+        ("TABLES_DIR", phase_report_dir / "tables"),
+        ("ROOT_TABLES_DIR", root_tables_dir),
+        ("PROJECT_ROOT", project_root),
+    ):
+        monkeypatch.setattr(f"urban_ops.models.baseline_workflow.{name}", value)
+    decision_path = project_root / "configs/models/threshold_decision.json"
+    decision_path.parent.mkdir(parents=True)
+    decision_path.write_text('{"selected_threshold": 0.49, "frozen": true}\n')
+    validation_population = {
+        "validation_sample_count": len(validation_labels),
+        "validation_positive_count": sum(validation_labels),
+    }
+    _write_phase_5_4_outputs(validation, **validation_population)
+    protected = {
+        path: path.read_bytes()
+        for path in (
+            decision_path,
+            root_tables_dir / "logistic_regression_validation_capacity_comparison.csv",
+            project_root / "reports/phase_5_4_capacity_comparison.md",
+        )
+    }
+    arguments = {
+        "test_sample_count": len(test_labels),
+        "test_positive_count": sum(test_labels),
+        **validation_population,
+        "final_test_results": final_test_results,
+    }
+
+    csv_path, report_path = _write_phase_5_7_outputs(
+        test_table, validation, **arguments
+    )
+    first_csv, first_report = csv_path.read_bytes(), report_path.read_bytes()
+    assert _write_phase_5_7_outputs(test_table, validation, **arguments) == (
+        csv_path,
+        report_path,
+    )
+
+    assert csv_path.name == "logistic_regression_test_operational_top_k.csv"
+    assert report_path.name == "phase_5_7_final_operational_test_evaluation.md"
+    assert csv_path.read_bytes() == first_csv
+    assert report_path.read_bytes() == first_report
+    assert (phase_report_dir / "tables" / csv_path.name).read_bytes() == first_csv
+    assert (phase_report_dir / report_path.name).read_bytes() == first_report
+    assert all(path.read_bytes() == before for path, before in protected.items())
+    persisted = pd.read_csv(csv_path)
+    assert persisted["evaluated_split"].tolist() == ["test"] * 3
+    assert persisted["capacity"].tolist() == [0.05, 0.10, 0.20]
+    assert persisted["selected_count"].tolist() == [2, 4, 8]
+    assert persisted["captured_positive_count"].tolist() == [1, 2, 3]
+
+    report = first_report.decode("utf-8")
+    flat = " ".join(report.split())
+    for heading in (
+        "## Purpose",
+        "## Frozen Evaluation Contract",
+        "## Test Population",
+        "## Final Test Top-K Results",
+        "## Operational Interpretation",
+        "## Validation vs Test Comparison",
+        "## Generalization Observations",
+        "## No Retuning Statement",
+        "## Final Phase 5 Conclusion",
+    ):
+        assert heading in report
+    assert "40 complaints, of which 15 actually missed" in flat
+    assert "On the test set, the highest-risk 10% of complaints" in flat
+    assert "**K rule:** `ceil(n × capacity)`" in flat
+    assert "**Test-time tuning:** none." in flat
+    assert "does not use the frozen Phase 4 `0.49` classification threshold" in flat
+    assert (
+        "No model retraining, feature changes, threshold tuning, capacity tuning, "
+        "model selection, or policy changes were performed based on test results."
+    ) in flat
+    assert "| 10% | 50.00% | 50.00% | 12.50% | 13.33% |" in report
+    assert "test Recall@K is 0.83 percentage points above validation" in flat
+    lowered = report.lower()
+    for phrase in ("optimal", "best capacity", "should use", "should review", "saved"):
+        assert phrase not in lowered
+    assert lowered.count("prevent") == 1
+    assert "would prevent missed resolution targets" in flat
+
+    with pytest.raises(EvaluationError, match="must use the test split"):
+        _write_phase_5_7_outputs(
+            test_table.assign(evaluated_split="validation"), validation, **arguments
+        )
+    with pytest.raises(EvaluationError, match="do not match the test population"):
+        _write_phase_5_7_outputs(
+            test_table,
+            validation,
+            **{**arguments, "test_sample_count": 60},
+        )
+    with pytest.raises(EvaluationError, match="does not match the final test"):
+        _write_phase_5_7_outputs(
+            test_table,
+            validation,
+            **{
+                **arguments,
+                "final_test_results": final_test_results.assign(
+                    precision_at_5_percent=0.9
+                ),
+            },
         )
