@@ -1,10 +1,14 @@
 """Integration coverage for frozen preprocessing outputs entering baselines."""
 
+import json
+
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
 from scipy import sparse
 
+from urban_ops.models import baseline_workflow
 from urban_ops.models.baselines import LogisticRegressionBaseline
 from urban_ops.models.baseline_workflow import (
     build_frozen_threshold_generalization_table,
@@ -40,6 +44,7 @@ from urban_ops.models.baseline_workflow import (
     build_logistic_test_frozen_threshold_table,
     build_ranking_curve_tables,
     build_validation_calibration_table,
+    _persist_selected_model,
     load_frozen_threshold_decision,
     load_frozen_baseline_inputs,
     write_frozen_threshold_decision,
@@ -72,6 +77,38 @@ def test_repository_frozen_threshold_artifact_is_the_validated_authority() -> No
     assert decision.constraint_value == pytest.approx(0.30)
     assert decision.secondary_objective == "maximize_recall"
     assert decision.frozen is True
+
+
+def test_selected_model_persistence_uses_frozen_threshold_authority(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Both selected-model artifacts must copy the validated frozen decision."""
+    fixture = build_eda_fixture(tmp_path, make_eda_frame())
+    inputs = load_frozen_baseline_inputs(
+        eda_config_path=fixture.config,
+        split_run_path=None,
+    )
+    decision = validate_frozen_threshold_decision(load_frozen_threshold_decision())
+    model_dir = tmp_path / "models" / "baselines"
+    monkeypatch.setattr(baseline_workflow, "MODEL_DIR", model_dir)
+
+    artifact_path = _persist_selected_model(
+        selected_model_name="Logistic Regression",
+        model_objects={"Logistic Regression": {"test_model": True}},
+        frozen_threshold_decision=decision,
+        inputs=inputs,
+    )
+
+    payload = joblib.load(artifact_path)
+    metadata = json.loads(
+        (model_dir / "selected_month_1_baseline_metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert decision.selected_threshold == 0.49
+    assert payload["selected_threshold"] == decision.selected_threshold
+    assert metadata["selected_threshold"] == decision.selected_threshold
 
 
 def test_frozen_inputs_to_logistic_validation_evaluation(tmp_path) -> None:

@@ -3238,10 +3238,11 @@ def _persist_selected_model(
     *,
     selected_model_name: str,
     model_objects: dict[str, object],
-    selected_threshold: float,
+    frozen_threshold_decision: FrozenThresholdDecision,
     inputs: FrozenBaselineInputs,
 ) -> Path:
-    """Persist the selected frozen baseline artifact and metadata."""
+    """Persist the selected baseline with its governed frozen threshold."""
+    selected_threshold = frozen_threshold_decision.selected_threshold
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     artifact_path = MODEL_DIR / "selected_month_1_baseline.joblib"
     payload = {
@@ -3387,7 +3388,7 @@ def run_baseline_workflow(
     artifact_path = _persist_selected_model(
         selected_model_name=selected_model_name,
         model_objects=model_objects,
-        selected_threshold=selected_threshold,
+        frozen_threshold_decision=frozen_threshold_decision,
         inputs=inputs,
     )
     _write_tables(
