@@ -87,7 +87,11 @@ By contrast:
 - selected-model metadata currently copies the older workflow value;
 - reports render upstream values but do not govern them; and
 - `month1_verification.py:EXPECTED_THRESHOLD` is a legacy assertion, not a
-  selection record with policy provenance.
+  selection record with policy provenance; and
+- `evaluation.py:FROZEN_THRESHOLD_SELECTED_THRESHOLD = 0.49` is a validator
+  pin that makes tampering with the artifact fail validation. It is not a
+  threshold source: governed consumers must not import it and must read
+  `decision.selected_threshold` from the validated artifact instead.
 
 The validator in `evaluation.py` also names the decision authoritative and
 rejects any artifact that does not match the approved frozen contract.
@@ -140,7 +144,10 @@ The validator rejects:
 - an unexpected policy name;
 - unexpected constraint name or value;
 - an unexpected secondary objective;
-- a selected rate above the workload constraint; and
+- a selected rate above the workload constraint;
+- non-boolean `frozen` values (for example the string `"false"`), a
+  non-numeric `selected_threshold`, and boolean count fields;
+- a `predicted_positive_count` that differs from TP + FP; and
 - invalid metric/count fields.
 
 The workflow additionally recomputes the approved candidate from validation and
@@ -196,7 +203,8 @@ Month 1 threshold.
 | Phase 4.3 sweep | Sweep row at 0.50 | Descriptive | Fixed sweep grid | Compliant | Retains 0.50. |
 | Minimum-precision policy | Constraint `precision >= 0.50` | Descriptive policy candidate | Policy configuration | Compliant | Constraint selects cutoff 0.49. |
 | `LogisticRegressionBaseline.predict` default | Generic default / 0.50 | Descriptive/generic | Caller-supplied decision for governed use | Conditionally compliant | Default may remain; governed callers must pass authority. |
-| `_fit_and_evaluate_validation` initial baseline row | Implicit model default / 0.50 | Descriptive baseline evidence | Descriptive default | Compliant if labelled default | Must not be called frozen. |
+| `_fit_and_evaluate_validation` initial baseline row | Implicit model default / 0.50 | Descriptive baseline evidence | Descriptive default | Label required | `baseline_results.md` Validation Comparison does not yet label these LR precision/recall/F1 values as the default 0.50 cutoff; add the label in the next phase. Must not be called frozen. |
+| `_fit_and_evaluate_validation` validation subgroup predictions (`logistic.predict(X_validation)`) | Implicit model default / 0.50 | Governed final subgroup metrics (validation half of `baseline_subgroup_results.csv`) | Validated frozen decision | Noncompliant | Separate code site from `_split_predictions`, whose validation predictions are discarded. The frozen decision is currently loaded after this function runs, so migration must load it first. |
 | `_split_predictions` Logistic branch | Hard-coded 0.50 | Governed | Validated frozen decision | Noncompliant | Next-phase migration required. |
 | Selected joblib payload | Workflow-returned 0.50 | Governed persistence | Validated frozen decision | Noncompliant | Currently verified as 0.50. |
 | Selected metadata JSON | Workflow-returned 0.50 | Governed persistence | Validated frozen decision | Noncompliant | Must not become another authority. |
@@ -231,9 +239,13 @@ Descriptive `0.50` tests remain intact.
 This authority phase intentionally does not migrate:
 
 - `_split_predictions`;
+- validation subgroup predictions in `_fit_and_evaluate_validation`;
 - selected-model joblib and metadata persistence;
 - baseline final test and subgroup artifacts;
 - baseline and Month 1 final reports;
+- report-template threshold strings in `baseline_workflow.py` that generate
+  those reports, and the Validation Comparison default-threshold label;
+- the `threshold=` value in the workflow completion log;
 - README project-status wording;
 - `month1_verification.py`; or
 - legacy completion-gate tests.
@@ -262,8 +274,11 @@ artifact. Consumer migration remains intentionally separate.
 The next phase should migrate the concrete noncompliant governed consumers in a
 single controlled workflow change:
 
-1. pass the validated frozen decision into selected-model Logistic Regression
-   classification instead of using literal/default 0.50;
+1. load the validated frozen decision before validation fitting/subgroup
+   computation and pass it into selected-model Logistic Regression
+   classification (both `_split_predictions` and the validation subgroup
+   predictions) instead of using literal/default 0.50, never importing the
+   validator pin constant;
 2. persist `decision.selected_threshold` in joblib and metadata;
 3. regenerate threshold-dependent final baseline and subgroup artifacts;
 4. regenerate the baseline and Month 1 reports and update README;

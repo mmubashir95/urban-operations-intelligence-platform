@@ -1066,7 +1066,7 @@ def validate_frozen_threshold_decision(
     """
     if not isinstance(decision, FrozenThresholdDecision):
         raise EvaluationError("frozen threshold decision has the wrong type.")
-    if not decision.frozen:
+    if decision.frozen is not True:
         raise EvaluationError("frozen threshold decision must have frozen=true.")
     if decision.policy_name != FROZEN_THRESHOLD_POLICY_NAME:
         raise EvaluationError("frozen threshold policy name is not approved.")
@@ -1078,6 +1078,8 @@ def validate_frozen_threshold_decision(
         raise EvaluationError("frozen threshold secondary objective is not approved.")
     if decision.selected_on_split != FROZEN_THRESHOLD_SELECTED_SPLIT:
         raise EvaluationError("frozen threshold must be selected on validation.")
+    if not isinstance(decision.selected_threshold, float):
+        raise EvaluationError("frozen threshold must be a JSON number.")
     selected_threshold = _validate_threshold(decision.selected_threshold)
     if selected_threshold != FROZEN_THRESHOLD_SELECTED_THRESHOLD:
         raise EvaluationError("frozen threshold must equal the approved value 0.49.")
@@ -1102,8 +1104,14 @@ def validate_frozen_threshold_decision(
     )
     for field in count_fields:
         value = getattr(decision, field)
-        if not isinstance(value, int) or value < 0:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise EvaluationError(f"frozen threshold decision has invalid {field}.")
+    if decision.predicted_positive_count != (
+        decision.true_positives + decision.false_positives
+    ):
+        raise EvaluationError(
+            "frozen threshold predicted_positive_count must equal TP + FP."
+        )
     return decision
 
 

@@ -853,6 +853,11 @@ def test_validate_frozen_threshold_decision_accepts_authoritative_contract() -> 
         ({"constraint_value": 0.20}, "0.30"),
         ({"secondary_objective": "maximize_precision"}, "secondary objective"),
         ({"predicted_positive_rate": 0.31}, "workload constraint"),
+        ({"frozen": "false"}, "frozen=true"),
+        ({"frozen": 1}, "frozen=true"),
+        ({"selected_threshold": "0.49"}, "JSON number"),
+        ({"true_positives": True}, "true_positives"),
+        ({"predicted_positive_count": 5}, "TP \\+ FP"),
     ],
 )
 def test_validate_frozen_threshold_decision_rejects_invalid_artifacts(
