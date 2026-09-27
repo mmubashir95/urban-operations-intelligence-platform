@@ -2736,6 +2736,10 @@ def _write_reports(
 
 ## Validation Comparison
 
+This comparison uses each baseline's own decision mechanism. For Logistic
+Regression, precision, recall, and F1 here use the descriptive default/reference
+cutoff 0.50, not the frozen threshold; they are model-comparison evidence only.
+
 {_format_metrics_table(validation_results)}
 
 ## Phase 1 — Basic Classification Evaluation
@@ -3162,7 +3166,7 @@ Month 1.
   {test_row["pr_auc"]:.4f}; change: -{validation_pr_auc_drop:.4f}
 - Validation ROC-AUC: {selected_row["roc_auc"]:.4f}; test ROC-AUC:
   {test_row["roc_auc"]:.4f}; change: -{validation_roc_auc_drop:.4f}
-- Validation recall at the frozen threshold: {frozen_threshold_decision.recall:.4f};
+- Frozen-threshold validation recall {frozen_threshold_decision.recall:.4f};
   test recall: {test_row["recall"]:.4f}; change: -{validation_recall_drop:.4f}
 
 This is meaningful performance degradation on the later chronological holdout.

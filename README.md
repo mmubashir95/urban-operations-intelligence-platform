@@ -14,7 +14,9 @@ Month 1 has completed the governed DSNY Graffiti resolution-risk baseline:
   `created_hour`, `created_day_of_week`, `created_month`, `is_weekend`;
 - four Month 1 baselines are implemented and evaluated;
 - Logistic Regression is selected as the strongest Month 1 baseline with
-  frozen threshold `0.5`;
+  frozen threshold `0.49`, selected on validation under the approved
+  workload-limited policy and recorded in
+  `configs/models/month1_logistic_regression_threshold_decision.json`;
 - final untouched test evaluation is complete;
 - the Month 1 report is generated at `reports/month_1_baseline_report.md`.
 
