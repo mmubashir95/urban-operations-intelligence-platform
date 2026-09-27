@@ -74,6 +74,10 @@ frozen threshold JSON
 object from `run_baseline_workflow`. It does not reload the JSON, create another
 parser, or define an independent `0.49` threshold.
 
+The frozen decision governs Logistic Regression only, so persistence raises
+`EvaluationError` if the selected model is anything else rather than pairing
+another model with the Logistic Regression threshold.
+
 ## 7. Selected Joblib Result
 
 After regeneration through `make baseline-resolution-risk`, the payload in
@@ -119,11 +123,11 @@ decision.
 
 | Check | Result |
 | --- | --- |
-| Focused persistence regression | 1 passed |
+| Focused persistence regressions | 3 passed (frozen authority, non-LR guard, committed artifacts) |
 | `pytest tests/unit/models/ -v` | 250 passed |
-| `pytest tests/integration/test_baseline_workflow.py -v` | 28 passed |
-| `pytest tests/integration/ -v` | 62 passed |
-| Full `pytest` | 876 passed |
+| `pytest tests/integration/test_baseline_workflow.py -v` | 30 passed |
+| `pytest tests/integration/ -v` | 64 passed |
+| Full `pytest` | 878 passed |
 | `git diff --check` | Passed |
 | Month 1 verification module | Failed as expected: legacy gate expected 0.50, observed 0.49 |
 
@@ -145,19 +149,43 @@ The following governed consumers still expose or apply the legacy threshold
 and belong to later cleanup phases:
 
 - Logistic Regression binary predictions returned by `_split_predictions`,
-  including threshold-dependent validation/test metrics and subgroup results;
+  including threshold-dependent final test metrics and test subgroup results;
+- validation subgroup predictions in `_fit_and_evaluate_validation`
+  (`logistic.predict(X_validation)`), a separate code site whose output is the
+  validation half of `baseline_subgroup_results.csv`;
 - `BaselineWorkflowResult.selected_threshold` and the selected-threshold values
   passed into generated report rendering;
 - governed selected/final sections of `reports/baseline_results.md` and
   `reports/month_1_baseline_report.md`;
 - the Month 1 threshold statement in `README.md`; and
-- `month1_verification.py:EXPECTED_THRESHOLD` and its report assertion.
+- the report-template threshold strings in `baseline_workflow.py` that render
+  those reports;
+- `month1_verification.py:EXPECTED_THRESHOLD` and its report assertion;
+- the legacy gate fixtures in `tests/unit/models/test_month1_verification.py`
+  that expect `threshold 0.5000`; and
+- any consumer of the persisted joblib, which must apply
+  `payload["selected_threshold"]` rather than the model's generic
+  `predict()` default of `0.50`.
 
 Descriptive Phase 4.1/4.2/4.3 comparisons at `0.50`, the minimum-precision
 constraint of `0.50`, and generic helper defaults remain intentionally
 unchanged.
 
-## 13. Phase 6.3 Verdict
+## 13. Known Transitional State
+
+Until the next phase lands, `main` is intentionally inconsistent:
+
+- the selected-model joblib and metadata store `0.49`;
+- the workflow log, `BaselineWorkflowResult.selected_threshold`, final test
+  and subgroup metrics, and generated report text still use `0.50`; and
+- `make verify-month1` fails with
+  `Selected threshold mismatch: expected 0.5, observed 0.49.`
+
+The generated reports' `MONTH 1 COMPLETE` statement is therefore stale and
+must not be relied on until the gate passes at `0.49`. Persistence must not be
+reverted to `0.50` to make the legacy gate pass.
+
+## 14. Phase 6.3 Verdict
 
 **PHASE 6.3 COMPLETE**
 

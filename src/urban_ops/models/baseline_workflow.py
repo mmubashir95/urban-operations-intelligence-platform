@@ -3242,6 +3242,13 @@ def _persist_selected_model(
     inputs: FrozenBaselineInputs,
 ) -> Path:
     """Persist the selected baseline with its governed frozen threshold."""
+    # The frozen decision was selected for Logistic Regression only; pairing it
+    # with any other model would persist a threshold that model never earned.
+    if selected_model_name != "Logistic Regression":
+        raise EvaluationError(
+            "the frozen threshold decision governs Logistic Regression only; "
+            f"cannot persist it for {selected_model_name}."
+        )
     selected_threshold = frozen_threshold_decision.selected_threshold
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     artifact_path = MODEL_DIR / "selected_month_1_baseline.joblib"

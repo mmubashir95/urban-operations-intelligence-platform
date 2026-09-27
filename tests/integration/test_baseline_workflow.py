@@ -111,6 +111,46 @@ def test_selected_model_persistence_uses_frozen_threshold_authority(
     assert metadata["selected_threshold"] == decision.selected_threshold
 
 
+def test_selected_model_persistence_rejects_non_logistic_model(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The Logistic Regression decision must not be paired with another model."""
+    fixture = build_eda_fixture(tmp_path, make_eda_frame())
+    inputs = load_frozen_baseline_inputs(
+        eda_config_path=fixture.config,
+        split_run_path=None,
+    )
+    decision = validate_frozen_threshold_decision(load_frozen_threshold_decision())
+    model_dir = tmp_path / "models" / "baselines"
+    monkeypatch.setattr(baseline_workflow, "MODEL_DIR", model_dir)
+
+    with pytest.raises(EvaluationError, match="Logistic Regression only"):
+        _persist_selected_model(
+            selected_model_name="Rule Based",
+            model_objects={"Rule Based": {"test_model": True}},
+            frozen_threshold_decision=decision,
+            inputs=inputs,
+        )
+    assert not model_dir.exists() or not any(model_dir.iterdir())
+
+
+def test_repository_selected_model_artifacts_match_frozen_decision() -> None:
+    """Committed selected-model artifacts carry the validated frozen threshold."""
+    decision = validate_frozen_threshold_decision(load_frozen_threshold_decision())
+    model_dir = baseline_workflow.MODEL_DIR
+    payload = joblib.load(model_dir / "selected_month_1_baseline.joblib")
+    metadata = json.loads(
+        (model_dir / "selected_month_1_baseline_metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert payload["selected_model_name"] == "Logistic Regression"
+    assert payload["selected_threshold"] == decision.selected_threshold
+    assert metadata["selected_threshold"] == decision.selected_threshold
+
+
 def test_frozen_inputs_to_logistic_validation_evaluation(tmp_path) -> None:
     """Run frozen input creation, sparse baseline fit, scoring, and evaluation."""
     fixture = build_eda_fixture(tmp_path, make_eda_frame())
