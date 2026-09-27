@@ -341,14 +341,17 @@ def _fit_and_evaluate_validation(
 ) -> tuple[
     pd.DataFrame,
     dict[str, object],
-    pd.DataFrame,
     dict[str, RankingEvaluation],
     dict[str, CalibrationEvaluation],
     ThresholdMetrics,
     tuple[ThresholdMetrics, ...],
     tuple[ThresholdMetrics, ...],
 ]:
-    """Fit train-only baselines and evaluate all models on validation."""
+    """Fit train-only baselines and evaluate all models on validation.
+
+    Governed selected-model subgroup analysis is built later, after the frozen
+    threshold decision is loaded and reconciled with validation provenance.
+    """
     X_train = inputs.matrices["train"]
     X_validation = inputs.matrices["validation"]
     y_train = inputs.targets["train"]
@@ -460,18 +463,9 @@ def _fit_and_evaluate_validation(
         "threshold_selection": threshold_selection,
         "historical_threshold": historical_threshold,
     }
-    subgroup = build_subgroup_analysis(
-        frame=validation_frame,
-        y_true=y_validation,
-        y_pred=logistic.predict(X_validation),
-        y_score=logistic_scores,
-        split_name="validation",
-        model_name="Logistic Regression",
-    )
     return (
         validation_results,
         model_objects,
-        subgroup,
         ranking_evaluations,
         calibration_evaluations,
         logistic_threshold_metrics,
@@ -511,8 +505,13 @@ def _split_predictions(
     inputs: FrozenBaselineInputs,
     *,
     split: str,
+    frozen_threshold_decision: FrozenThresholdDecision,
 ) -> tuple[object, object, float]:
-    """Return split predictions, scores, and frozen binary threshold."""
+    """Return split predictions, scores, and frozen binary threshold.
+
+    Logistic Regression is classified at the validated frozen decision's
+    ``selected_threshold``, never at the model's generic 0.50 default.
+    """
     matrix = inputs.matrices[split]
     frame = inputs.frames[split]
     if selected_model_name == "Majority Class":
@@ -530,7 +529,9 @@ def _split_predictions(
         return model.predict(frame), scores, threshold
     if selected_model_name == "Logistic Regression":
         model = model_objects[selected_model_name]
-        return model.predict(matrix), model.predict_score(matrix), 0.5
+        scores = model.predict_score(matrix)
+        threshold = frozen_threshold_decision.selected_threshold
+        return predict_from_scores(scores, threshold), scores, threshold
     raise RuntimeError(f"Unsupported selected model: {selected_model_name}")
 
 
@@ -2962,15 +2963,39 @@ Selected artifact: `{artifact_path.relative_to(PROJECT_ROOT)}`
     )
     subgroup_summary = _subgroup_summary(subgroup_results)
     calibration_summary = _calibration_summary(calibration_results)
+    # The governed Month 1 threshold comes only from the validated frozen
+    # decision; the selected-model path must already have applied it.
+    governed_threshold = frozen_threshold_decision.selected_threshold
+    if selected_threshold != governed_threshold:
+        raise EvaluationError(
+            "Month 1 report threshold must equal the frozen threshold decision."
+        )
+    frozen_test_row = logistic_test_frozen_threshold_result.iloc[0]
+    zero_recall_test_groups = int(
+        (
+            subgroup_results["split"].eq("test")
+            & subgroup_results["recall"].eq(0.0)
+        ).sum()
+    )
+    subgroup_recall_note = (
+        f"{zero_recall_test_groups} sufficiently populated test subgroups show "
+        f"zero recall at the frozen threshold {governed_threshold:.4f}."
+        if zero_recall_test_groups
+        else "No sufficiently populated test subgroup has zero recall at the "
+        f"frozen threshold {governed_threshold:.4f}."
+    )
     validation_pr_auc_drop = selected_row["pr_auc"] - test_row["pr_auc"]
     validation_roc_auc_drop = selected_row["roc_auc"] - test_row["roc_auc"]
-    validation_recall_drop = selected_row["recall"] - test_row["recall"]
+    validation_recall_drop = frozen_threshold_decision.recall - test_row["recall"]
     month_1 = f"""# Month 1 Baseline Report
 
 ## 1. Executive Summary
 
 MONTH 1 COMPLETE. The selected Month 1 baseline is `{selected_model_name}` with
-the frozen threshold {selected_threshold:.4f}. The untouched final test
+the frozen threshold {governed_threshold:.4f}, selected on
+{frozen_threshold_decision.selected_on_split} under the approved workload-limited
+policy and recorded in `{FROZEN_THRESHOLD_DECISION_PATH.relative_to(PROJECT_ROOT)}`.
+The untouched final test
 ROC-AUC is {test_row["roc_auc"]:.4f}, PR-AUC is {test_row["pr_auc"]:.4f},
 Recall@10% is {test_row["recall_at_10_percent"]:.4f}, and Brier score is
 {test_row["brier_score"]:.4f}. These results establish a reproducible baseline,
@@ -3051,6 +3076,11 @@ The frozen feature order is: {", ".join(inputs.feature_names)}.
 
 ## 12. Validation Results
 
+This comparison uses each baseline's own decision mechanism. For Logistic
+Regression, precision, recall, and F1 here use the descriptive default/reference
+cutoff 0.50, not the frozen threshold; they are model-comparison evidence only.
+Baseline selection uses the threshold-independent ranking metrics.
+
 {_format_metrics_table(validation_results)}
 
 ## 13. Baseline Selection Decision
@@ -3081,13 +3111,19 @@ ranking by ROC-AUC.
 
 ## 15. Threshold Interpretation
 
-At the frozen threshold {selected_threshold:.4f}, final test precision is
+At the frozen threshold {governed_threshold:.4f}, final test precision is
 {test_row["precision"]:.4f}, recall is {test_row["recall"]:.4f}, and F1 is
-{test_row["f1"]:.4f}. This means the classifier identifies only
-{test_row["recall"] * 100:.1f}% of actual missed-target complaints. The frozen
-0.5 threshold is not operationally useful as a high-recall binary alert
-threshold. It remains frozen because test data is final evaluation only and must
-not be used for threshold retuning.
+{test_row["f1"]:.4f}. The classifier flags
+{int(frozen_test_row["predicted_positive_count"])} of {int(test_row["row_count"])}
+test complaints (flagged rate {frozen_test_row["predicted_positive_rate"]:.4f})
+with {int(test_row["true_positive"])} true positives,
+{int(test_row["false_positive"])} false positives,
+{int(test_row["true_negative"])} true negatives, and
+{int(test_row["false_negative"])} false negatives. It therefore identifies only
+{test_row["recall"] * 100:.1f}% of actual missed-target complaints. The threshold
+was selected on validation (validation recall
+{frozen_threshold_decision.recall:.4f}) and remains frozen because test data is
+final evaluation only and must not be used for threshold retuning.
 
 ## 16. Operational Top-K Evaluation
 
@@ -3104,7 +3140,7 @@ missed-target complaints. Precision@20% is {test_row["precision_at_20_percent"]:
 meaning roughly {test_row["precision_at_20_percent"] * 100:.1f}% of complaints
 selected in the top-risk 20% actually missed their resolution target. The model
 is more useful as a weak prioritization/ranking baseline than as a binary
-classifier at threshold 0.5.
+classifier at the frozen threshold {governed_threshold:.4f}.
 
 ## 17. Calibration Evaluation
 
@@ -3126,8 +3162,8 @@ Month 1.
   {test_row["pr_auc"]:.4f}; change: -{validation_pr_auc_drop:.4f}
 - Validation ROC-AUC: {selected_row["roc_auc"]:.4f}; test ROC-AUC:
   {test_row["roc_auc"]:.4f}; change: -{validation_roc_auc_drop:.4f}
-- Validation recall: {selected_row["recall"]:.4f}; test recall:
-  {test_row["recall"]:.4f}; change: -{validation_recall_drop:.4f}
+- Validation recall at the frozen threshold: {frozen_threshold_decision.recall:.4f};
+  test recall: {test_row["recall"]:.4f}; change: -{validation_recall_drop:.4f}
 
 This is meaningful performance degradation on the later chronological holdout.
 The report treats it as temporal generalization weakness. It does not claim a
@@ -3138,8 +3174,8 @@ new drift diagnosis beyond the split-policy evidence already documented in
 
 {subgroup_summary}
 
-Several sufficiently populated temporal subgroups show zero recall at the
-frozen 0.5 threshold. This is descriptive error analysis only and does not imply
+Subgroup precision, recall, and error counts use the frozen threshold
+{governed_threshold:.4f}. {subgroup_recall_note} This is descriptive error analysis only and does not imply
 that those temporal groups cause missed targets.
 
 ## 20. Limitations
@@ -3147,14 +3183,14 @@ that those temporal groups cause missed targets.
 The baseline does not use unresolved conditional geography fields, NLP, gradient
 boosting, SHAP, forecasting, resolution-time regression, text classification, or
 calibration fitting. Absolute predictive performance is weak, especially for
-binary alerts at threshold 0.5.
+binary alerts at the frozen threshold {governed_threshold:.4f}.
 
 ## 21. Month 1 Conclusion
 
 The Month 1 Logistic Regression baseline provides measurable but limited
 predictive signal from the frozen temporal feature set. Its final chronological
 test performance is weak: ROC-AUC = {test_row["roc_auc"]:.4f} and recall at
-threshold 0.5 = {test_row["recall"]:.4f}. Risk ranking is more useful than hard
+the frozen threshold {governed_threshold:.4f} = {test_row["recall"]:.4f}. Risk ranking is more useful than hard
 classification: the highest-risk 20% captures {test_row["recall_at_20_percent"] * 100:.1f}%
 of actual missed-target complaints. These results establish a valid reproducible
 baseline but do not justify production deployment.
@@ -3234,6 +3270,34 @@ def _calibration_summary(calibration_results: pd.DataFrame) -> str:
     )
 
 
+def _verify_final_test_matches_frozen_threshold_evaluation(
+    final_test_results: pd.DataFrame,
+    frozen_test_metrics: ThresholdMetrics,
+) -> None:
+    """Require the final test row to restate the Phase 4.7 frozen evaluation.
+
+    Both are computed from the same test scores at the validated frozen
+    threshold; any disagreement means a governed consumer used another cutoff.
+    """
+    if len(final_test_results) != 1:
+        raise EvaluationError("final test results must contain exactly one row.")
+    row = final_test_results.iloc[0]
+    for final_column, value in (
+        ("true_positive", frozen_test_metrics.true_positives),
+        ("false_positive", frozen_test_metrics.false_positives),
+        ("true_negative", frozen_test_metrics.true_negatives),
+        ("false_negative", frozen_test_metrics.false_negatives),
+        ("precision", frozen_test_metrics.precision),
+        ("recall", frozen_test_metrics.recall),
+        ("f1", frozen_test_metrics.f1),
+    ):
+        if not math.isclose(float(row[final_column]), float(value), abs_tol=1e-12):
+            raise EvaluationError(
+                f"final test {final_column} does not match the frozen threshold "
+                "evaluation."
+            )
+
+
 def _persist_selected_model(
     *,
     selected_model_name: str,
@@ -3284,7 +3348,6 @@ def run_baseline_workflow(
     (
         validation_results,
         model_objects,
-        validation_subgroups,
         ranking_evaluations,
         calibration_evaluations,
         logistic_threshold_metrics,
@@ -3353,17 +3416,19 @@ def run_baseline_workflow(
         )
     )
     selected_model_name = select_baseline(validation_results)
-    _, validation_score, selected_threshold = _split_predictions(
+    validation_pred, validation_score, selected_threshold = _split_predictions(
         selected_model_name,
         model_objects,
         inputs,
         split="validation",
+        frozen_threshold_decision=frozen_threshold_decision,
     )
     test_pred, test_score, selected_threshold = _split_predictions(
         selected_model_name,
         model_objects,
         inputs,
         split="test",
+        frozen_threshold_decision=frozen_threshold_decision,
     )
     test_metrics = _evaluate(
         selected_model_name,
@@ -3373,6 +3438,18 @@ def run_baseline_workflow(
     )
     test_results = pd.DataFrame(
         [metrics_row(selected_model_name, test_metrics, evaluated_split="test")]
+    )
+    _verify_final_test_matches_frozen_threshold_evaluation(
+        test_results,
+        logistic_test_frozen_threshold_metrics,
+    )
+    validation_subgroups = build_subgroup_analysis(
+        frame=inputs.frames["validation"],
+        y_true=inputs.targets["validation"],
+        y_pred=validation_pred,
+        y_score=validation_score,
+        split_name="validation",
+        model_name=selected_model_name,
     )
     test_subgroups = build_subgroup_analysis(
         frame=inputs.frames["test"],

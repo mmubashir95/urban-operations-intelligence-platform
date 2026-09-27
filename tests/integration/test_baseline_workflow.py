@@ -13,6 +13,8 @@ from urban_ops.models.baselines import LogisticRegressionBaseline
 from urban_ops.models.baseline_workflow import (
     build_frozen_threshold_generalization_table,
     _fit_and_evaluate_validation,
+    _split_predictions,
+    _verify_final_test_matches_frozen_threshold_evaluation,
     _format_confusion_matrices,
     _format_phase_4_3_focus_table,
     _format_phase_4_3_transition_summary,
@@ -151,6 +153,101 @@ def test_repository_selected_model_artifacts_match_frozen_decision() -> None:
     assert metadata["selected_threshold"] == decision.selected_threshold
 
 
+def test_selected_logistic_predictions_use_frozen_threshold(tmp_path) -> None:
+    """Governed selected-model classification applies the frozen decision."""
+    fixture = build_eda_fixture(tmp_path, make_eda_frame())
+    inputs = load_frozen_baseline_inputs(
+        eda_config_path=fixture.config,
+        split_run_path=None,
+    )
+    _, model_objects, *_ = _fit_and_evaluate_validation(inputs)
+    decision = validate_frozen_threshold_decision(load_frozen_threshold_decision())
+
+    for split in ("validation", "test"):
+        predictions, scores, threshold = _split_predictions(
+            "Logistic Regression",
+            model_objects,
+            inputs,
+            split=split,
+            frozen_threshold_decision=decision,
+        )
+
+        assert threshold == decision.selected_threshold
+        np.testing.assert_array_equal(
+            predictions,
+            (np.asarray(scores) >= decision.selected_threshold).astype(int),
+        )
+
+
+def test_final_test_guard_rejects_metrics_from_another_threshold() -> None:
+    """Final test metrics computed at 0.50 cannot pass as the frozen result."""
+    y_true = [1, 0, 1, 0]
+    scores = [0.495, 0.495, 0.60, 0.10]
+    frozen = evaluate_threshold(y_true, scores, threshold=0.49)
+    legacy = evaluate_threshold(y_true, scores, threshold=0.50)
+
+    def final_row(metrics) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "true_positive": metrics.true_positives,
+                    "false_positive": metrics.false_positives,
+                    "true_negative": metrics.true_negatives,
+                    "false_negative": metrics.false_negatives,
+                    "precision": metrics.precision,
+                    "recall": metrics.recall,
+                    "f1": metrics.f1,
+                }
+            ]
+        )
+
+    _verify_final_test_matches_frozen_threshold_evaluation(final_row(frozen), frozen)
+    with pytest.raises(EvaluationError, match="does not match the frozen"):
+        _verify_final_test_matches_frozen_threshold_evaluation(
+            final_row(legacy),
+            frozen,
+        )
+
+
+def test_repository_month_1_report_follows_frozen_threshold_decision() -> None:
+    """The committed Month 1 report restates governed frozen-threshold outputs."""
+    decision = validate_frozen_threshold_decision(load_frozen_threshold_decision())
+    report = (
+        baseline_workflow.PROJECT_ROOT / "reports/month_1_baseline_report.md"
+    ).read_text(encoding="utf-8")
+    final_test = pd.read_csv(
+        baseline_workflow.ROOT_TABLES_DIR / "baseline_test_results.csv"
+    ).iloc[0]
+    frozen_test = pd.read_csv(
+        baseline_workflow.ROOT_TABLES_DIR
+        / "logistic_regression_test_frozen_threshold.csv"
+    ).iloc[0]
+
+    assert frozen_test["threshold"] == decision.selected_threshold
+    for final_column, frozen_column in (
+        ("true_positive", "true_positives"),
+        ("false_positive", "false_positives"),
+        ("true_negative", "true_negatives"),
+        ("false_negative", "false_negatives"),
+        ("precision", "precision"),
+        ("recall", "recall"),
+        ("f1", "f1"),
+    ):
+        assert final_test[final_column] == pytest.approx(frozen_test[frozen_column])
+
+    assert f"frozen threshold {decision.selected_threshold:.4f}" in report
+    assert f"final test precision is\n{final_test['precision']:.4f}" in report
+    assert f"recall is {final_test['recall']:.4f}" in report
+    assert "descriptive default/reference" in report
+    for legacy_label in (
+        "frozen threshold 0.5000",
+        "frozen 0.5",
+        "threshold 0.5 ",
+        "threshold 0.5.",
+    ):
+        assert legacy_label not in report
+
+
 def test_frozen_inputs_to_logistic_validation_evaluation(tmp_path) -> None:
     """Run frozen input creation, sparse baseline fit, scoring, and evaluation."""
     fixture = build_eda_fixture(tmp_path, make_eda_frame())
@@ -233,7 +330,6 @@ def test_all_validation_baselines_share_phase_1_schema_and_readable_counts(
 
     (
         results,
-        _,
         _,
         ranking_evaluations,
         calibration_evaluations,
@@ -390,7 +486,7 @@ def test_ranking_figures_use_validation_curves_and_prevalence_reference(
         eda_config_path=fixture.config,
         split_run_path=None,
     )
-    results, _, _, ranking_evaluations, _, _, _, _ = _fit_and_evaluate_validation(
+    results, _, ranking_evaluations, _, _, _, _ = _fit_and_evaluate_validation(
         inputs
     )
     roc_table, pr_table = build_ranking_curve_tables(
@@ -429,7 +525,7 @@ def test_validation_calibration_figure_uses_all_baseline_probability_points(
         eda_config_path=fixture.config,
         split_run_path=None,
     )
-    results, _, _, _, evaluations, _, _, _ = _fit_and_evaluate_validation(inputs)
+    results, _, _, evaluations, _, _, _ = _fit_and_evaluate_validation(inputs)
     calibration_table = build_validation_calibration_table(evaluations)
     phase_figures = tmp_path / "phase_figures"
     root_figures = tmp_path / "root_figures"
