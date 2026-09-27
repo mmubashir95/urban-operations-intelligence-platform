@@ -56,8 +56,22 @@ from urban_ops.models.evaluation import (
     evaluate_threshold_selection_policies,
     evaluate_threshold_sweep,
     freeze_workload_limited_threshold,
+    validate_frozen_threshold_decision,
 )
 from tests.unit.eda.conftest import build_eda_fixture, make_eda_frame
+
+
+def test_repository_frozen_threshold_artifact_is_the_validated_authority() -> None:
+    """The governed threshold comes from the validated repository JSON."""
+    decision = validate_frozen_threshold_decision(load_frozen_threshold_decision())
+
+    assert decision.selected_threshold == 0.49
+    assert decision.selected_on_split == "validation"
+    assert decision.policy_name == "max_flagged_rate"
+    assert decision.constraint_name == "predicted_positive_rate"
+    assert decision.constraint_value == pytest.approx(0.30)
+    assert decision.secondary_objective == "maximize_recall"
+    assert decision.frozen is True
 
 
 def test_frozen_inputs_to_logistic_validation_evaluation(tmp_path) -> None:

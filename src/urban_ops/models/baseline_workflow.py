@@ -1328,7 +1328,13 @@ def write_frozen_threshold_decision(
 def load_frozen_threshold_decision(
     path: Path = FROZEN_THRESHOLD_DECISION_PATH,
 ) -> FrozenThresholdDecision:
-    """Load the authoritative frozen threshold decision for later phases."""
+    """Deserialize the authoritative Month 1 threshold decision artifact.
+
+    Governed consumers must pass the returned decision through
+    :func:`validate_frozen_threshold_decision` and then use its
+    ``selected_threshold``. Selected-model metadata, report text, and generic
+    classifier defaults are not independent threshold authorities.
+    """
     payload = json.loads(path.read_text(encoding="utf-8"))
     return FrozenThresholdDecision(**payload)
 
