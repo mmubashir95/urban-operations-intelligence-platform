@@ -73,3 +73,39 @@ optimized or final model configuration. No parameter sweep, hyperparameter
 tuning, early stopping, or validation-driven selection was performed. No real
 project data was trained or evaluated while selecting or verifying these
 values; verification uses only tiny synthetic sparse matrices.
+
+## Phase 2.5 train-only fitting
+
+`load_and_train_gradient_boosted_risk_model()` begins with the Phase 2.1 input
+gate, constructs the Phase 2.3 wrapper using the unchanged Phase 2.4
+configuration, and calls `fit()` with only:
+
+- `inputs.matrices["train"]`
+- `inputs.targets["train"]`
+- `inputs.feature_names`
+
+The fitted model remains in memory and is not persisted or promoted. Training
+metadata records the split identity, training rows, ordered features, class
+counts, positive-class rate, configuration version, and seed. It contains no
+performance metrics.
+
+Validation is not passed to `fit()` or `eval_set`, and no early stopping is
+used. Test data is not used. Phase 2.5 produces no validation or test
+predictions and performs no evaluation, tuning, calibration, or explanation.
+
+The verified repository training run recorded descriptive metadata only:
+
+| Field | Value |
+| --- | ---: |
+| Frozen split ID | `20260806T135114Z_9d945cb2da0eecfc` |
+| Training rows | 23,699 |
+| Features | 4 |
+| Negative-class rows | 12,792 |
+| Positive-class rows | 10,907 |
+| Positive-class rate | 0.4602303895 |
+| Configuration version | 1 |
+| Random seed | 20260806 |
+
+These values describe the rows used for fitting; they are not model-quality
+metrics. Repeated fits produced identical scores on a fixed small training
+slice, confirming the configured training path is reproducible.
