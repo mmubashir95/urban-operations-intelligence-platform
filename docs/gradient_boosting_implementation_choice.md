@@ -34,3 +34,19 @@ configuration.
 Phase 2.1 remains the required input gate. The production model wrapper,
 training behavior, scoring API, evaluation, model comparison, and persistence
 belong to later phases.
+
+## Phase 2.3 project wrapper
+
+`GradientBoostedRiskModel` encapsulates `XGBClassifier` behind the same
+project-facing shape used by the Logistic Regression baseline:
+
+- `fit(X_train, y_train, feature_names=...)`
+- `predict_score(X)`
+- `predict_proba(X)`
+- `predict(X, threshold=0.5)`
+
+The wrapper consumes already-preprocessed matrices and preserves the supplied
+frozen feature-name order. No preprocessing, data splitting, evaluation,
+calibration, hyperparameter tuning, test-set logic, or persistence happens
+inside the wrapper. The default threshold of `0.5` is only a technical method
+default and is not a frozen operational decision.
