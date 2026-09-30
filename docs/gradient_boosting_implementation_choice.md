@@ -129,3 +129,21 @@ with shape `(6762,)`. All values were finite and within `[0, 1]`; the observed
 contract range was `0.1989542842` to `0.6090874076`. This range is descriptive
 output validation only, not a model-quality evaluation. The fitted booster was
 unchanged after score generation.
+
+## Phase 2.7 shared ranking evaluation
+
+`evaluate_gradient_boosting_validation_ranking()` passes the frozen
+`inputs.targets["validation"]` and the unchanged Phase 2.6 continuous score
+vector directly to the existing Month 1 `evaluate_ranking()` function. It
+returns the existing `RankingEvaluation`, including PR-AUC (the established
+average-precision definition) and ROC-AUC.
+
+No threshold or hard predictions are used, and the Month 1 threshold `0.49`
+is not applied. Only validation is evaluated; test scores and labels remain
+untouched. This phase adds no Brier, calibration, Top-K, comparison, tuning, or
+model-selection logic.
+
+The verified repository validation run evaluated 6,762 aligned rows and
+produced PR-AUC `0.4513751420` and ROC-AUC `0.5441074891`. These are Gradient
+Boosting validation ranking results only; Phase 2.7 makes no final comparison
+or model-selection decision.
