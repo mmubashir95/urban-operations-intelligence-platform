@@ -8,6 +8,7 @@ pandas
 pyarrow
 PyYAML
 scikit-learn
+xgboost>=3.0.2,<4
 
 # Testing
 pytest
