@@ -61,11 +61,10 @@ def test_xgb_classifier_imports_and_instantiates() -> None:
 def test_selection_config_freezes_xgboost_classifier() -> None:
     selection = yaml.safe_load(SELECTION_CONFIG_PATH.read_text(encoding="utf-8"))
 
-    assert selection == {
-        "selection_version": 1,
-        "implementation": "xgboost",
-        "estimator": "XGBClassifier",
-    }
+    assert selection["selection_version"] == 1
+    assert selection["implementation"] == "xgboost"
+    assert selection["estimator"] == "XGBClassifier"
+    assert isinstance(selection["starting_configuration"], dict)
 
 
 def test_xgb_classifier_fits_tiny_sparse_csr_matrix() -> None:

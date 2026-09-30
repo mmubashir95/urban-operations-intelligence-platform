@@ -1,15 +1,21 @@
 """Unit tests for the project-facing XGBoost risk-model wrapper."""
 
+from inspect import signature
+
 import numpy as np
 import pandas as pd
 import pytest
 from scipy import sparse
+import yaml
 from xgboost import XGBClassifier
 
 from urban_ops.models.gradient_boosting import (
+    GRADIENT_BOOSTING_CONFIG_PATH,
     GradientBoostedRiskModel,
     GradientBoostingModelError,
+    load_gradient_boosting_config,
 )
+from urban_ops.models.baselines import DEFAULT_RANDOM_STATE
 
 
 FEATURE_NAMES = ("first_signal", "second_signal", "third_signal")
@@ -46,6 +52,114 @@ def test_model_constructs_with_encapsulated_xgb_classifier() -> None:
     model = GradientBoostedRiskModel()
 
     assert isinstance(model._model, XGBClassifier)
+
+
+def test_authoritative_phase_2_4_configuration_loads() -> None:
+    config = load_gradient_boosting_config()
+
+    assert GRADIENT_BOOSTING_CONFIG_PATH.is_file()
+    assert config.implementation == "xgboost"
+    assert config.estimator == "XGBClassifier"
+    assert config.model_parameters == {
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "n_estimators": 100,
+        "learning_rate": 0.1,
+        "max_depth": 3,
+        "random_state": DEFAULT_RANDOM_STATE,
+        "n_jobs": 1,
+    }
+
+
+def test_default_model_uses_approved_phase_2_4_configuration() -> None:
+    model = GradientBoostedRiskModel()
+    estimator_parameters = model._model.get_params()
+
+    assert model.config == load_gradient_boosting_config()
+    for name, expected in model.config.model_parameters.items():
+        assert estimator_parameters[name] == expected
+
+
+def test_wrapper_public_method_signatures_remain_stable() -> None:
+    assert tuple(signature(GradientBoostedRiskModel.fit).parameters) == (
+        "self",
+        "X_train",
+        "y_train",
+        "feature_names",
+    )
+    assert tuple(signature(GradientBoostedRiskModel.predict_score).parameters) == (
+        "self",
+        "X",
+    )
+    assert tuple(signature(GradientBoostedRiskModel.predict_proba).parameters) == (
+        "self",
+        "X",
+    )
+    assert tuple(signature(GradientBoostedRiskModel.predict).parameters) == (
+        "self",
+        "X",
+        "threshold",
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda payload: payload.update({"unexpected": True}), "fields"),
+        (
+            lambda payload: payload["starting_configuration"].update(
+                {"objective": "multi:softprob"}
+            ),
+            "objective",
+        ),
+        (
+            lambda payload: payload["starting_configuration"].update(
+                {"eval_metric": "auc"}
+            ),
+            "eval_metric",
+        ),
+        (
+            lambda payload: payload["starting_configuration"].update(
+                {"n_estimators": 0}
+            ),
+            "n_estimators",
+        ),
+        (
+            lambda payload: payload["starting_configuration"].update(
+                {"learning_rate": 0.0}
+            ),
+            "learning_rate",
+        ),
+        (
+            lambda payload: payload["starting_configuration"].update(
+                {"max_depth": -1}
+            ),
+            "max_depth",
+        ),
+        (
+            lambda payload: payload["starting_configuration"].update(
+                {"random_state": 42}
+            ),
+            "project seed",
+        ),
+        (
+            lambda payload: payload["starting_configuration"].update({"n_jobs": 0}),
+            "n_jobs",
+        ),
+    ],
+)
+def test_invalid_project_configuration_fails_clearly(
+    tmp_path, mutation, message: str
+) -> None:
+    payload = yaml.safe_load(
+        GRADIENT_BOOSTING_CONFIG_PATH.read_text(encoding="utf-8")
+    )
+    mutation(payload)
+    path = tmp_path / "invalid-gradient-boosting.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(GradientBoostingModelError, match=message):
+        load_gradient_boosting_config(path)
 
 
 def test_valid_sparse_binary_fit_preserves_exact_feature_order() -> None:

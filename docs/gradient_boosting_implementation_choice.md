@@ -50,3 +50,26 @@ frozen feature-name order. No preprocessing, data splitting, evaluation,
 calibration, hyperparameter tuning, test-set logic, or persistence happens
 inside the wrapper. The default threshold of `0.5` is only a technical method
 default and is not a frozen operational decision.
+
+## Phase 2.4 initial configuration
+
+The single authoritative starting configuration lives in
+`configs/models/resolution_risk_gradient_boosting.yaml`. Default construction
+of `GradientBoostedRiskModel` loads and validates that file before constructing
+`XGBClassifier`.
+
+| Parameter | Value | Purpose |
+| --- | ---: | --- |
+| `objective` | `binary:logistic` | Produce probabilities for binary classification. |
+| `eval_metric` | `logloss` | Use a probability-oriented training objective report. |
+| `n_estimators` | `100` | Start with a modest fixed number of trees. |
+| `learning_rate` | `0.1` | Use a conservative contribution from each tree. |
+| `max_depth` | `3` | Limit the initial trees to shallow interactions. |
+| `random_state` | `20260806` | Reuse the project seed for reproducibility. |
+| `n_jobs` | `1` | Keep CPU execution controlled and deterministic. |
+
+These are conservative starting defaults for the first experiment, not an
+optimized or final model configuration. No parameter sweep, hyperparameter
+tuning, early stopping, or validation-driven selection was performed. No real
+project data was trained or evaluated while selecting or verifying these
+values; verification uses only tiny synthetic sparse matrices.
