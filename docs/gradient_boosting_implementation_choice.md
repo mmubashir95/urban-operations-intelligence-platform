@@ -109,3 +109,23 @@ The verified repository training run recorded descriptive metadata only:
 These values describe the rows used for fitting; they are not model-quality
 metrics. Repeated fits produced identical scores on a fixed small training
 slice, confirming the configured training path is reproducible.
+
+## Phase 2.6 validation risk probabilities
+
+`generate_gradient_boosting_validation_scores()` receives the already-fitted
+Phase 2.5 `GradientBoostedRiskModel` and the verified frozen inputs. It passes
+`inputs.matrices["validation"]` directly to `model.predict_score()` and returns
+one one-dimensional positive-class risk score per validation complaint in the
+original matrix row order.
+
+The score is the estimated risk of target class `1`, meaning the complaint
+misses its resolution target. No threshold is applied, validation labels are
+not needed, and the test split is not accessed. The helper performs no
+training, ranking, metric calculation, calibration, model comparison, or
+artifact persistence.
+
+The verified repository scoring run produced 6,762 aligned validation scores
+with shape `(6762,)`. All values were finite and within `[0, 1]`; the observed
+contract range was `0.1989542842` to `0.6090874076`. This range is descriptive
+output validation only, not a model-quality evaluation. The fitted booster was
+unchanged after score generation.
