@@ -223,6 +223,7 @@ reports/*
 reports/month_2/*
 !reports/month_2/phase_2_gradient_boosting.md
 !reports/month_2/phase_2_gradient_boosting_calibration.csv
+!reports/month_2/phase_2_gradient_boosting_capacity.csv
 !reports/month_2/phase_2_gradient_boosting_validation.csv
 !reports/month_2/phase_2_model_comparison.csv
 

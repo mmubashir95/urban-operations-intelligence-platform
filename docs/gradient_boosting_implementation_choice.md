@@ -163,3 +163,19 @@ probability transformation. Training and test probabilities and labels are not
 used. The measured Brier score and bin findings are recorded in
 `reports/month_2/phase_2_gradient_boosting.md`, with the canonical table in
 `reports/month_2/phase_2_gradient_boosting_calibration.csv`.
+
+## Phase 2.9 shared operational Top-K evaluation
+
+`evaluate_gradient_boosting_validation_capacity()` obtains the established
+5%, 10%, and 20% review levels from `get_standard_capacity_levels()` and
+passes the frozen validation labels and unchanged Phase 2.6 probability vector
+to `compare_capacity_levels()`. That shared evaluator reuses deterministic
+descending-risk ranking, stable original-order tie handling, and the existing
+`ceil(validation rows × capacity)` selected-count rule.
+
+Top-K selection uses continuous raw risk and applies no classification
+threshold, including the frozen Logistic Regression threshold `0.49`. No
+capacity is selected or recommended. Test scores and labels remain untouched.
+Results are recorded in
+`reports/month_2/phase_2_gradient_boosting_capacity.csv` and summarized in the
+Phase 2 Markdown report.

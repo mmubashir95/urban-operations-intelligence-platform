@@ -1,0 +1,4 @@
+model,evaluated_split,capacity,capacity_pct,selected_count,captured_positive_count,precision_at_k,recall_at_k,additional_selected_count,additional_captured_positive_count,additional_capacity_pct_points,additional_recall,additional_recall_pct_points
+Gradient Boosting,validation,0.05,5.0,339,135,0.39823008849557523,0.04684247050659265,,,,,
+Gradient Boosting,validation,0.1,10.0,677,305,0.4505169867060561,0.10582928521859819,338,170,5.0,0.05898681471200554,5.898681471200554
+Gradient Boosting,validation,0.2,20.0,1353,612,0.4523281596452328,0.21235253296322,676,307,10.0,0.1065232477446218,10.65232477446218
