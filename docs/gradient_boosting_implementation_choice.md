@@ -215,3 +215,20 @@ population. It returns typed frozen evidence with source paths and normalized
 metric names. The workflow compares those values with its current validation
 results using `Gradient Boosting - Logistic Regression` for every metric,
 including Brier Score. Logistic Regression is not retrained or rescored.
+
+## Phase 2.13 deterministic reporting consolidation
+
+The dedicated workflow passes its already-computed ranking, calibration,
+capacity, configuration, split, and frozen-comparison evidence to
+`write_gradient_boosting_reports()`. The reporting layer formats this single
+source of truth into the validation, calibration, capacity, comparison, and
+Markdown artifacts under `reports/month_2/`; it does not train a model,
+generate scores, or recalculate evaluation metrics.
+
+CSV files preserve machine-readable full-precision evidence and deterministic
+row ordering. The Markdown report provides rounded human-readable views of the
+same evidence, records the explicit model configuration and split boundary,
+answers the ranking and raw-calibration questions, keeps threshold selection
+deferred, and confirms that test labels and scores were not accessed. Report
+generation does not embed timestamps, machine-specific paths, or unstable
+object representations, so identical inputs produce identical files.

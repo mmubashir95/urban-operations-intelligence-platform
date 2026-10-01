@@ -36,8 +36,16 @@ def test_workflow_reuses_one_validation_score_array_across_evaluators(
         split_id="frozen-split",
     )
     training = SimpleNamespace(
-        model=object(),
-        metadata=SimpleNamespace(training_row_count=8, feature_count=2),
+        model=SimpleNamespace(
+            config=SimpleNamespace(model_parameters={"random_state": 20260806})
+        ),
+        metadata=SimpleNamespace(
+            training_row_count=8,
+            feature_count=2,
+            implementation="XGBoost",
+            model_class="GradientBoostedRiskModel",
+            configuration_version=1,
+        ),
     )
     calls = []
     ranking = evaluate_ranking(y_validation, validation_scores)

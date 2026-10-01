@@ -1,19 +1,58 @@
-# Phase 2 Gradient Boosting Validation Workflow
+# Phase 2 — Gradient Boosting Validation Report
 
-## Workflow boundary
+## 1. Experiment Objective
+
+This first Gradient Boosting experiment tests whether a deterministic boosted
+tree model improves missed-target risk ranking over the frozen Month 1 Logistic
+Regression benchmark. Phase 2 establishes reproducible validation evidence; it
+does not select a production model or operational policy.
+
+## 2. Model Trained
+
+The workflow trained the existing `XGBoost` binary classifier
+through the `GradientBoostedRiskModel` project wrapper. Class `1` represents a complaint
+that misses its expected resolution target.
+
+## 3. Frozen Inputs Reused
 
 The dedicated Month 2 workflow reused frozen Month 1 inputs (`20260806T135114Z_9d945cb2da0eecfc`),
-fitted the deterministic XGBoost configuration on 23,699
-training rows and 4 frozen features, then generated one raw
-positive-class probability per validation complaint. Preprocessing was not
-refitted. Test scores and labels were not accessed.
+including the chronological split membership, target definition, fitted
+preprocessing outputs, sparse feature matrices, and ordered feature names.
+The matrices contain 4 features. Preprocessing was not refitted
+and feature columns were not reordered.
+
+Month 1 inputs remained frozen; only the model implementation changed.
+
+## 4. Evaluation Boundary
+
+- **TRAIN:** fitted the model on 23,699 rows.
+- **VALIDATION:** evaluated 6,762 rows using ranking,
+  raw-probability calibration, Top-K capacity, and frozen-model comparison.
+- **TEST:** untouched; no test scores or labels were accessed.
 
 The same raw, uncalibrated validation score array feeds ranking, calibration,
 and operational Top-K evaluation. No classification threshold is applied; in
 particular, the frozen Logistic Regression threshold `0.49` is not transferred
 to Gradient Boosting.
 
-## Validation metrics
+## 5. Model Configuration
+
+Configuration version: `1`. Only explicitly configured
+parameters are shown.
+
+| Parameter | Value |
+|---|---|
+| `objective` | `binary:logistic` |
+| `eval_metric` | `logloss` |
+| `n_estimators` | `100` |
+| `learning_rate` | `0.1` |
+| `max_depth` | `3` |
+| `random_state` | `20260806` |
+| `n_jobs` | `1` |
+
+No hyperparameter tuning was performed in Phase 2.
+
+## 6. Validation Metrics
 
 | Metric | Gradient Boosting |
 |---|---:|
@@ -21,7 +60,13 @@ to Gradient Boosting.
 | ROC-AUC | 0.5441074891 |
 | Brier Score | 0.2441231897 |
 
-## Raw-probability calibration
+Higher PR-AUC and ROC-AUC indicate stronger ranking. Lower Brier Score indicates
+lower probability prediction error.
+
+Machine-readable values are in
+`reports/month_2/phase_2_gradient_boosting_validation.csv`.
+
+## 7. Raw Probability Calibration
 
 The Brier Score and ten uniform calibration bins use raw validation
 probabilities. Empty bins remain present in the CSV; populated bins are shown
@@ -40,7 +85,12 @@ Differences between predicted and observed rates show region-specific under-
 or over-prediction. No probability calibration transformation or qualitative
 pass/fail rule is applied.
 
-## Operational capacity
+The evidence does not support a binary "well calibrated" label: the raw
+probabilities show region-specific under- and over-prediction. No calibration
+method was applied. Full-precision bins are in
+`reports/month_2/phase_2_gradient_boosting_calibration.csv`.
+
+## 8. Operational Top-K Evaluation
 
 Capacity is a percentage of the 6,762-complaint validation
 population. Counts use the shared `ceil(n × capacity)` rule.
@@ -55,7 +105,10 @@ Expanding the reviewed prefix increases captured misses and recall. These
 figures describe validation evidence only; no capacity or staffing policy is
 selected.
 
-## Frozen Logistic Regression comparison
+Full-precision capacity evidence is in
+`reports/month_2/phase_2_gradient_boosting_capacity.csv`.
+
+## 9. Frozen Logistic Regression Comparison
 
 The Logistic Regression values come from frozen Month 1 validation CSV
 evidence. Logistic Regression is not retrained. Gradient Boosting values come
@@ -79,7 +132,40 @@ from the current Month 2 validation workflow, and every difference is
 | Precision@20% | 0.4915 | 0.4523 | -0.0392 |
 | Recall@20% | 0.2307 | 0.2124 | -0.0184 |
 
-The initial Gradient Boosting configuration has lower validation PR-AUC and ROC-AUC than the frozen Logistic Regression benchmark. Gradient Boosting also has a slightly higher Brier Score, indicating slightly higher validation probability error. This evidence does not establish
-that either model is universally better. No tuning, probability calibration
-transformation, threshold selection, or test-set evaluation occurs in this
-workflow.
+Full-precision differences are in
+`reports/month_2/phase_2_model_comparison.csv`.
+
+## 10. Ranking Improvement Assessment
+
+The initial Gradient Boosting configuration has lower validation PR-AUC and ROC-AUC than the frozen Logistic Regression benchmark. Precision@K and Recall@K are also lower at every shared capacity. Therefore, the initial untuned
+Gradient Boosting configuration
+did not materially improve validation ranking over the frozen Logistic
+Regression benchmark. This does not establish that Gradient Boosting is
+universally worse or unusable.
+
+Gradient Boosting also has a slightly higher Brier Score, indicating slightly higher validation probability error.
+
+## 11. Threshold Policy Status
+
+Gradient Boosting operational threshold selection remains deferred. The frozen
+Logistic Regression threshold `0.49` was not transferred to Gradient Boosting,
+and no `0.5` or other threshold is selected by this report.
+
+## 12. Test-Set Protection
+
+No test labels were used, no test probabilities were generated, and no test
+evaluation was performed. Phase 2 reporting contains validation evidence only.
+
+## 13. Phase 3 Readiness
+
+Yes—the experiment is technically ready to proceed to Phase 3 model
+selection/tuning because the train-only fit, validation evaluation stack,
+frozen comparison, and deterministic reports work end to end while the test set
+remains protected. This does not mean the model is production-ready.
+
+## 14. Conclusion
+
+The initial deterministic Gradient Boosting pipeline is reproducible, but its
+current validation ranking, Top-K performance, and Brier Score do not improve
+on the frozen Logistic Regression evidence. Phase 2 changes no features,
+preprocessing, threshold policy, calibration method, or test-set boundary.

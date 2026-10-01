@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil, isclose
 from pathlib import Path
-from typing import Final
+from typing import Final, Mapping
 
 import numpy as np
 import pandas as pd
@@ -329,9 +329,13 @@ def _markdown_report(
     training_row_count: int,
     feature_count: int,
     split_id: str,
+    model_implementation: str,
+    model_class: str,
+    configuration_version: int,
+    model_configuration: Mapping[str, object],
     frozen_logistic_regression: FrozenLogisticRegressionValidationEvidence,
 ) -> str:
-    """Render the concise validation-only Phase 2 workflow report."""
+    """Render the complete human-readable Phase 2 reporting contract."""
     metrics = validation.iloc[0]
     capacity_rows = list(capacity.itertuples(index=False))
     capacity_lines = "\n".join(
@@ -363,10 +367,24 @@ def _markdown_report(
         if brier_difference > 0.0
         else "The Brier difference is shown without changing its GB - LR sign."
     )
+    top_k_differences = comparison.loc[
+        comparison["metric"].str.startswith(("Precision@", "Recall@")),
+        "difference_gb_minus_lr",
+    ]
+    top_k_interpretation = (
+        "Precision@K and Recall@K are also lower at every shared capacity."
+        if top_k_differences.lt(0.0).all()
+        else "The Top-K table provides the capacity-specific ranking evidence."
+    )
     validation_source = _artifact_display_path(
         frozen_logistic_regression.validation_source
     )
-    capacity_source = _artifact_display_path(frozen_logistic_regression.capacity_source)
+    capacity_source = _artifact_display_path(
+        frozen_logistic_regression.capacity_source
+    )
+    configuration_lines = "\n".join(
+        f"| `{name}` | `{value}` |" for name, value in model_configuration.items()
+    )
     populated_bins = calibration_table.loc[calibration_table["row_count"].gt(0)]
     calibration_lines = "\n".join(
         f"| {row.lower_bound:.1f}–{row.upper_bound:.1f} | "
@@ -374,22 +392,55 @@ def _markdown_report(
         f"{row.observed_positive_rate:.4f} |"
         for row in populated_bins.itertuples(index=False)
     )
-    return f"""# Phase 2 Gradient Boosting Validation Workflow
+    return f"""# Phase 2 — Gradient Boosting Validation Report
 
-## Workflow boundary
+## 1. Experiment Objective
+
+This first Gradient Boosting experiment tests whether a deterministic boosted
+tree model improves missed-target risk ranking over the frozen Month 1 Logistic
+Regression benchmark. Phase 2 establishes reproducible validation evidence; it
+does not select a production model or operational policy.
+
+## 2. Model Trained
+
+The workflow trained the existing `{model_implementation}` binary classifier
+through the `{model_class}` project wrapper. Class `1` represents a complaint
+that misses its expected resolution target.
+
+## 3. Frozen Inputs Reused
 
 The dedicated Month 2 workflow reused frozen Month 1 inputs (`{split_id}`),
-fitted the deterministic XGBoost configuration on {training_row_count:,}
-training rows and {feature_count:,} frozen features, then generated one raw
-positive-class probability per validation complaint. Preprocessing was not
-refitted. Test scores and labels were not accessed.
+including the chronological split membership, target definition, fitted
+preprocessing outputs, sparse feature matrices, and ordered feature names.
+The matrices contain {feature_count:,} features. Preprocessing was not refitted
+and feature columns were not reordered.
+
+Month 1 inputs remained frozen; only the model implementation changed.
+
+## 4. Evaluation Boundary
+
+- **TRAIN:** fitted the model on {training_row_count:,} rows.
+- **VALIDATION:** evaluated {int(metrics.row_count):,} rows using ranking,
+  raw-probability calibration, Top-K capacity, and frozen-model comparison.
+- **TEST:** untouched; no test scores or labels were accessed.
 
 The same raw, uncalibrated validation score array feeds ranking, calibration,
 and operational Top-K evaluation. No classification threshold is applied; in
 particular, the frozen Logistic Regression threshold `0.49` is not transferred
 to Gradient Boosting.
 
-## Validation metrics
+## 5. Model Configuration
+
+Configuration version: `{configuration_version}`. Only explicitly configured
+parameters are shown.
+
+| Parameter | Value |
+|---|---|
+{configuration_lines}
+
+No hyperparameter tuning was performed in Phase 2.
+
+## 6. Validation Metrics
 
 | Metric | Gradient Boosting |
 |---|---:|
@@ -397,7 +448,13 @@ to Gradient Boosting.
 | ROC-AUC | {metrics.roc_auc:.10f} |
 | Brier Score | {metrics.brier_score:.10f} |
 
-## Raw-probability calibration
+Higher PR-AUC and ROC-AUC indicate stronger ranking. Lower Brier Score indicates
+lower probability prediction error.
+
+Machine-readable values are in
+`reports/month_2/phase_2_gradient_boosting_validation.csv`.
+
+## 7. Raw Probability Calibration
 
 The Brier Score and ten uniform calibration bins use raw validation
 probabilities. Empty bins remain present in the CSV; populated bins are shown
@@ -411,7 +468,12 @@ Differences between predicted and observed rates show region-specific under-
 or over-prediction. No probability calibration transformation or qualitative
 pass/fail rule is applied.
 
-## Operational capacity
+The evidence does not support a binary "well calibrated" label: the raw
+probabilities show region-specific under- and over-prediction. No calibration
+method was applied. Full-precision bins are in
+`reports/month_2/phase_2_gradient_boosting_calibration.csv`.
+
+## 8. Operational Top-K Evaluation
 
 Capacity is a percentage of the {int(metrics.row_count):,}-complaint validation
 population. Counts use the shared `ceil(n × capacity)` rule.
@@ -424,7 +486,10 @@ Expanding the reviewed prefix increases captured misses and recall. These
 figures describe validation evidence only; no capacity or staffing policy is
 selected.
 
-## Frozen Logistic Regression comparison
+Full-precision capacity evidence is in
+`reports/month_2/phase_2_gradient_boosting_capacity.csv`.
+
+## 9. Frozen Logistic Regression Comparison
 
 The Logistic Regression values come from frozen Month 1 validation CSV
 evidence. Logistic Regression is not retrained. Gradient Boosting values come
@@ -440,10 +505,43 @@ from the current Month 2 validation workflow, and every difference is
 |---|---:|---:|---:|
 {comparison_lines}
 
-{ranking_interpretation} {brier_interpretation} This evidence does not establish
-that either model is universally better. No tuning, probability calibration
-transformation, threshold selection, or test-set evaluation occurs in this
-workflow.
+Full-precision differences are in
+`reports/month_2/phase_2_model_comparison.csv`.
+
+## 10. Ranking Improvement Assessment
+
+{ranking_interpretation} {top_k_interpretation} Therefore, the initial untuned
+Gradient Boosting configuration
+did not materially improve validation ranking over the frozen Logistic
+Regression benchmark. This does not establish that Gradient Boosting is
+universally worse or unusable.
+
+{brier_interpretation}
+
+## 11. Threshold Policy Status
+
+Gradient Boosting operational threshold selection remains deferred. The frozen
+Logistic Regression threshold `0.49` was not transferred to Gradient Boosting,
+and no `0.5` or other threshold is selected by this report.
+
+## 12. Test-Set Protection
+
+No test labels were used, no test probabilities were generated, and no test
+evaluation was performed. Phase 2 reporting contains validation evidence only.
+
+## 13. Phase 3 Readiness
+
+Yes—the experiment is technically ready to proceed to Phase 3 model
+selection/tuning because the train-only fit, validation evaluation stack,
+frozen comparison, and deterministic reports work end to end while the test set
+remains protected. This does not mean the model is production-ready.
+
+## 14. Conclusion
+
+The initial deterministic Gradient Boosting pipeline is reproducible, but its
+current validation ranking, Top-K performance, and Brier Score do not improve
+on the frozen Logistic Regression evidence. Phase 2 changes no features,
+preprocessing, threshold policy, calibration method, or test-set boundary.
 """
 
 
@@ -456,16 +554,18 @@ def write_gradient_boosting_reports(
     training_row_count: int,
     feature_count: int,
     split_id: str,
+    model_implementation: str,
+    model_class: str,
+    configuration_version: int,
+    model_configuration: Mapping[str, object],
     output_directory: Path | str = MONTH_2_REPORT_DIR,
     frozen_validation_path: Path | str = FROZEN_VALIDATION_RESULTS_PATH,
     frozen_capacity_path: Path | str = FROZEN_CAPACITY_RESULTS_PATH,
 ) -> GradientBoostingReportArtifacts:
     """Write all Phase 2 validation reports from completed workflow results."""
-    frozen_logistic_regression = (
-        load_frozen_logistic_regression_validation_metrics(
+    frozen_logistic_regression = load_frozen_logistic_regression_validation_metrics(
         validation_results_path=frozen_validation_path,
         capacity_results_path=frozen_capacity_path,
-        )
     )
     validation = _validation_table(ranking, calibration)
     comparison = build_model_comparison_table(
@@ -494,6 +594,10 @@ def write_gradient_boosting_reports(
             training_row_count=training_row_count,
             feature_count=feature_count,
             split_id=split_id,
+            model_implementation=model_implementation,
+            model_class=model_class,
+            configuration_version=configuration_version,
+            model_configuration=model_configuration,
             frozen_logistic_regression=frozen_logistic_regression,
         ),
         encoding="utf-8",

@@ -18,6 +18,7 @@ from urban_ops.models.gradient_boosting_reporting import (
     FrozenLogisticRegressionValidationEvidence,
     build_model_comparison_table,
     load_frozen_logistic_regression_validation_metrics,
+    write_gradient_boosting_reports,
 )
 
 
@@ -187,3 +188,129 @@ def test_comparison_difference_is_always_gradient_boosting_minus_logistic() -> N
     assert comparison.loc["Brier Score", "difference_gb_minus_lr"] == pytest.approx(
         0.02
     )
+
+
+def test_report_writer_produces_complete_deterministic_phase_2_contract(
+    tmp_path,
+) -> None:
+    frozen_directory = tmp_path / "frozen"
+    frozen_directory.mkdir()
+    validation_path, capacity_path = _write_frozen_frames(frozen_directory)
+    ranking = RankingEvaluation(
+        metrics=RankingMetrics(100, 40, 60, 0.40, 0.55, 0.58),
+        curves=RankingCurves((), (), (), (), (), ()),
+    )
+    calibration = CalibrationEvaluation(
+        metrics=CalibrationMetrics(100, 40, 60, 0.40, 0.21),
+        curve=CalibrationCurve((), (), 10, "uniform"),
+    )
+    calibration_table = pd.DataFrame(
+        {
+            "bin_index": [0, 1],
+            "lower_bound": [0.0, 0.1],
+            "upper_bound": [0.1, 0.2],
+            "row_count": [60, 40],
+            "mean_predicted_risk": [0.05, 0.15],
+            "observed_positive_rate": [0.20, 0.70],
+        }
+    )
+    capacity_table = pd.DataFrame(
+        {
+            "capacity": [0.05, 0.10, 0.20],
+            "capacity_pct": [5.0, 10.0, 20.0],
+            "selected_count": [5, 10, 20],
+            "captured_positive_count": [2, 4, 9],
+            "precision_at_k": [0.40, 0.40, 0.45],
+            "recall_at_k": [0.05, 0.10, 0.225],
+        }
+    )
+    configuration = {
+        "objective": "binary:logistic",
+        "n_estimators": 100,
+        "random_state": 20260806,
+    }
+
+    outputs = []
+    for directory_name in ("first", "second"):
+        artifacts = write_gradient_boosting_reports(
+            ranking=ranking,
+            calibration=calibration,
+            calibration_table=calibration_table,
+            capacity_table=capacity_table,
+            training_row_count=200,
+            feature_count=2,
+            split_id="frozen-split",
+            model_implementation="XGBoost",
+            model_class="GradientBoostedRiskModel",
+            configuration_version=1,
+            model_configuration=configuration,
+            output_directory=tmp_path / directory_name,
+            frozen_validation_path=validation_path,
+            frozen_capacity_path=capacity_path,
+        )
+        outputs.append(artifacts)
+
+    first, second = outputs
+    artifact_pairs = (
+        (first.validation_path, second.validation_path),
+        (first.calibration_path, second.calibration_path),
+        (first.capacity_path, second.capacity_path),
+        (first.comparison_path, second.comparison_path),
+        (first.markdown_path, second.markdown_path),
+    )
+    for first_path, second_path in artifact_pairs:
+        assert first_path.is_file()
+        assert first_path.read_bytes() == second_path.read_bytes()
+
+    validation_csv = pd.read_csv(first.validation_path)
+    assert validation_csv.loc[0, "evaluated_split"] == "validation"
+    assert validation_csv.loc[0, "probability_status"] == "raw_uncalibrated"
+    assert validation_csv[["pr_auc", "roc_auc", "brier_score"]].notna().all().all()
+
+    capacity_csv = pd.read_csv(first.capacity_path)
+    assert capacity_csv["capacity"].tolist() == [0.05, 0.10, 0.20]
+    assert len(capacity_csv) == 3
+
+    comparison_csv = pd.read_csv(first.comparison_path)
+    assert comparison_csv["metric"].tolist() == list(COMPARISON_METRICS)
+    assert comparison_csv["difference_gb_minus_lr"].tolist() == pytest.approx(
+        (
+            comparison_csv["gradient_boosting"]
+            - comparison_csv["logistic_regression"]
+        ).tolist()
+    )
+
+    markdown = first.markdown_path.read_text(encoding="utf-8")
+    required_sections = (
+        "## 2. Model Trained",
+        "## 3. Frozen Inputs Reused",
+        "## 4. Evaluation Boundary",
+        "## 5. Model Configuration",
+        "## 6. Validation Metrics",
+        "## 7. Raw Probability Calibration",
+        "## 8. Operational Top-K Evaluation",
+        "## 9. Frozen Logistic Regression Comparison",
+        "## 10. Ranking Improvement Assessment",
+        "## 11. Threshold Policy Status",
+        "## 12. Test-Set Protection",
+        "## 13. Phase 3 Readiness",
+    )
+    assert all(section in markdown for section in required_sections)
+    for fact in (
+        "GradientBoostedRiskModel",
+        "frozen Month 1 inputs",
+        "TRAIN",
+        "VALIDATION",
+        "PR-AUC",
+        "ROC-AUC",
+        "Brier Score",
+        "Recall@K",
+        "Logistic Regression is not retrained",
+        "did not materially improve validation ranking",
+        "region-specific under- and over-prediction",
+        "threshold selection remains deferred",
+        "`0.49` was not transferred",
+        "No test labels were used",
+        "technically ready to proceed to Phase 3",
+    ):
+        assert fact in markdown
