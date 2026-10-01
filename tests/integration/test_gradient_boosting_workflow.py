@@ -29,7 +29,7 @@ class ProtectedSplits(dict):
     def __getitem__(self, key):
         self.accessed.append(key)
         if key == "test":
-            raise AssertionError("Phase 2.11 accessed the test split.")
+            raise AssertionError("Phase 2 accessed the protected test split.")
         return super().__getitem__(key)
 
 
@@ -85,6 +85,7 @@ def test_dedicated_workflow_uses_train_and_validation_only(
     )
     load_calls = []
     fit_calls = []
+    score_calls = []
     evaluation_calls = []
 
     def load_inputs(**kwargs):
@@ -101,6 +102,12 @@ def test_dedicated_workflow_uses_train_and_validation_only(
             y_train,
             feature_names=feature_names,
         )
+
+    original_predict_score = GradientBoostedRiskModel.predict_score
+
+    def spy_predict_score(model, X):
+        score_calls.append(X)
+        return original_predict_score(model, X)
 
     original_ranking = gradient_boosting_workflow.evaluate_ranking
     original_calibration = gradient_boosting_workflow.evaluate_calibration
@@ -124,6 +131,11 @@ def test_dedicated_workflow_uses_train_and_validation_only(
         load_inputs,
     )
     monkeypatch.setattr(GradientBoostedRiskModel, "fit", spy_fit)
+    monkeypatch.setattr(
+        GradientBoostedRiskModel,
+        "predict_score",
+        spy_predict_score,
+    )
     monkeypatch.setattr(
         gradient_boosting_workflow,
         "evaluate_ranking",
@@ -162,6 +174,8 @@ def test_dedicated_workflow_uses_train_and_validation_only(
     assert fitted_matrix is inputs.matrices["train"]
     assert fitted_target is inputs.targets["train"]
     assert fitted_names == inputs.feature_names
+    assert len(score_calls) == 1
+    assert score_calls[0] is inputs.matrices["validation"]
     assert matrices.accessed == ["train", "validation"]
     assert targets.accessed == ["train", "validation"]
     assert [name for name, _, _ in evaluation_calls] == [
@@ -242,6 +256,9 @@ def test_dedicated_workflow_uses_train_and_validation_only(
     )
     assert "Frozen Logistic Regression Comparison" in markdown_report
     assert "No test labels were used" in markdown_report
+    report_directory = result.report_artifacts.markdown_path.parent
+    assert not tuple(report_directory.glob("*gradient_boosting_test*"))
+    assert not tuple(report_directory.glob("*phase_2_test*"))
     assert result.frozen_logistic_regression.frozen is True
     assert result.frozen_logistic_regression.evaluated_split == "validation"
     assert result.frozen_logistic_regression.row_count == len(
