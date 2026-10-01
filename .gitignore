@@ -218,7 +218,13 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Generated analysis reports
-reports/
+reports/*
+!reports/month_2/
+reports/month_2/*
+!reports/month_2/phase_2_gradient_boosting.md
+!reports/month_2/phase_2_gradient_boosting_calibration.csv
+!reports/month_2/phase_2_gradient_boosting_validation.csv
+!reports/month_2/phase_2_model_comparison.csv
 
 # Immutable raw extracts and atomic ingestion work directories
 data/raw/**

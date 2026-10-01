@@ -1,0 +1,2 @@
+model,evaluated_split,probability_status,row_count,positive_count,negative_count,positive_rate,pr_auc,roc_auc,brier_score
+Gradient Boosting,validation,raw_uncalibrated,6762,2882,3880,0.4262052647145815,0.45137514203766316,0.5441074890718789,0.2441231896662757

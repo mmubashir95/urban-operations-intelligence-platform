@@ -147,3 +147,19 @@ The verified repository validation run evaluated 6,762 aligned rows and
 produced PR-AUC `0.4513751420` and ROC-AUC `0.5441074891`. These are Gradient
 Boosting validation ranking results only; Phase 2.7 makes no final comparison
 or model-selection decision.
+
+## Phase 2.8 shared raw-probability calibration evaluation
+
+`evaluate_gradient_boosting_validation_calibration()` passes the frozen
+`inputs.targets["validation"]` and the same unchanged Phase 2.6 probability
+vector directly to the existing Month 1 `evaluate_calibration()` function. Its
+reporting table is produced by the existing `build_calibration_table()` helper,
+preserving the canonical ten uniform bins, column names, boundary convention,
+and empty-bin representation.
+
+This phase evaluates raw positive-class probabilities only. It does not apply
+Platt scaling, isotonic regression, a sigmoid, a threshold, or any other
+probability transformation. Training and test probabilities and labels are not
+used. The measured Brier score and bin findings are recorded in
+`reports/month_2/phase_2_gradient_boosting.md`, with the canonical table in
+`reports/month_2/phase_2_gradient_boosting_calibration.csv`.
