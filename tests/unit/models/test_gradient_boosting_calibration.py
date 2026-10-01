@@ -14,10 +14,8 @@ from urban_ops.models.evaluation import (
     evaluate_calibration,
 )
 from urban_ops.models.gradient_boosting_calibration import (
-    GRADIENT_BOOSTING_CALIBRATION_FILENAME,
     GradientBoostingCalibrationResult,
     evaluate_gradient_boosting_validation_calibration,
-    write_gradient_boosting_calibration_table,
 )
 
 
@@ -121,19 +119,3 @@ def test_test_labels_are_not_accessed() -> None:
     )
 
     assert result.calibration.metrics.row_count == 4
-
-
-def test_canonical_calibration_artifact_preserves_table_schema(tmp_path) -> None:
-    y_validation = pd.Series([0, 1, 0, 1])
-    scores = np.asarray([0.1, 0.8, 0.2, 0.9])
-    result = evaluate_gradient_boosting_validation_calibration(
-        SimpleNamespace(targets={"validation": y_validation}),
-        scores,
-    )
-
-    output_path = write_gradient_boosting_calibration_table(result, tmp_path)
-
-    assert output_path == tmp_path / GRADIENT_BOOSTING_CALIBRATION_FILENAME
-    persisted = pd.read_csv(output_path)
-    assert tuple(persisted.columns) == tuple(result.table.columns)
-    assert int(persisted["row_count"].sum()) == len(y_validation)

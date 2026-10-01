@@ -76,9 +76,9 @@ values; verification uses only tiny synthetic sparse matrices.
 
 ## Phase 2.5 train-only fitting
 
-`load_and_train_gradient_boosted_risk_model()` begins with the Phase 2.1 input
-gate, constructs the Phase 2.3 wrapper using the unchanged Phase 2.4
-configuration, and calls `fit()` with only:
+`train_gradient_boosted_risk_model()` receives inputs that have already passed
+the Phase 2.1 input gate, constructs the Phase 2.3 wrapper using the unchanged
+Phase 2.4 configuration, and calls `fit()` with only:
 
 - `inputs.matrices["train"]`
 - `inputs.targets["train"]`
@@ -185,8 +185,10 @@ Phase 2 Markdown report.
 `run_gradient_boosting_workflow()` is the dedicated Month 2 orchestration
 boundary. It loads and verifies the frozen Month 1 model inputs, performs the
 existing train-only fit, generates validation probabilities exactly once, and
-passes that same array directly to the shared ranking, calibration, and
-capacity evaluators. It returns a structured `GradientBoostingWorkflowResult`
+passes that same array through the Phase 2.7–2.9 helpers
+(`evaluate_gradient_boosting_validation_ranking()`, `..._calibration()`, and
+`..._capacity()`) to the shared Month 1 evaluators. All Phase 2 CSV and
+Markdown artifacts are written by one writer, `write_gradient_boosting_reports()`. It returns a structured `GradientBoostingWorkflowResult`
 and writes the complete Month 2 report set.
 
 The workflow loads frozen Logistic Regression validation evidence from CSV for

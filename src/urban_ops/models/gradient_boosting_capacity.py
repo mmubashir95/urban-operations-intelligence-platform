@@ -8,7 +8,6 @@ select a capacity policy, refit a model, or access the test split.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import pandas as pd
 
@@ -19,9 +18,6 @@ from urban_ops.models.evaluation import (
     compare_capacity_levels,
     get_standard_capacity_levels,
 )
-
-
-GRADIENT_BOOSTING_CAPACITY_FILENAME = "phase_2_gradient_boosting_capacity.csv"
 
 
 @dataclass(frozen=True)
@@ -93,15 +89,3 @@ def evaluate_gradient_boosting_validation_capacity(
         comparisons=comparisons,
         table=build_gradient_boosting_capacity_table(comparisons),
     )
-
-
-def write_gradient_boosting_capacity_table(
-    result: GradientBoostingCapacityResult,
-    output_directory: Path | str,
-) -> Path:
-    """Persist the validation capacity table using the canonical schema."""
-    directory = Path(output_directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    output_path = directory / GRADIENT_BOOSTING_CAPACITY_FILENAME
-    result.table.to_csv(output_path, index=False)
-    return output_path

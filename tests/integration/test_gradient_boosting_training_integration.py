@@ -4,8 +4,10 @@ import numpy as np
 from scipy import sparse
 
 from urban_ops.models import gradient_boosting_training
+from urban_ops.models.gradient_boosting_inputs import (
+    load_and_verify_gradient_boosting_inputs,
+)
 from urban_ops.models.gradient_boosting_training import (
-    load_and_train_gradient_boosted_risk_model,
     train_gradient_boosted_risk_model,
 )
 from tests.unit.eda.conftest import build_eda_fixture, make_eda_frame
@@ -14,13 +16,12 @@ from tests.unit.eda.conftest import build_eda_fixture, make_eda_frame
 def test_real_frozen_input_path_fits_train_only(tmp_path, monkeypatch) -> None:
     fixture = build_eda_fixture(tmp_path, make_eda_frame())
     original_model = gradient_boosting_training.GradientBoostedRiskModel
-    original_loader = gradient_boosting_training.load_and_verify_gradient_boosting_inputs
-    observed = {}
-
-    def tracked_loader(**kwargs):
-        inputs = original_loader(**kwargs)
-        observed["inputs"] = inputs
-        return inputs
+    observed = {
+        "inputs": load_and_verify_gradient_boosting_inputs(
+            eda_config_path=fixture.config,
+            split_run_path=None,
+        )
+    }
 
     class SpyModel(original_model):
         def fit(self, X_train, y_train, *, feature_names):
@@ -30,16 +31,8 @@ def test_real_frozen_input_path_fits_train_only(tmp_path, monkeypatch) -> None:
             return super().fit(X_train, y_train, feature_names=feature_names)
 
     monkeypatch.setattr(gradient_boosting_training, "GradientBoostedRiskModel", SpyModel)
-    monkeypatch.setattr(
-        gradient_boosting_training,
-        "load_and_verify_gradient_boosting_inputs",
-        tracked_loader,
-    )
 
-    result = load_and_train_gradient_boosted_risk_model(
-        eda_config_path=fixture.config,
-        split_run_path=None,
-    )
+    result = train_gradient_boosted_risk_model(observed["inputs"])
 
     assert sparse.isspmatrix_csr(observed["X"])
     assert observed["X"] is observed["inputs"].matrices["train"]

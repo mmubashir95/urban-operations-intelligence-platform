@@ -28,7 +28,9 @@ Month 1 inputs remained frozen; only the model implementation changed.
 - **TRAIN:** fitted the model on 23,699 rows.
 - **VALIDATION:** evaluated 6,762 rows using ranking,
   raw-probability calibration, Top-K capacity, and frozen-model comparison.
-- **TEST:** untouched; no test scores or labels were accessed.
+- **TEST:** never scored, evaluated, or used for selection. Test labels and
+  timestamps are read only by the frozen-input gate's structural checks
+  (row counts, binary target domain, chronology, and the Month 1 contract).
 
 The same raw, uncalibrated validation score array feeds ranking, calibration,
 and operational Top-K evaluation. No classification threshold is applied; in
@@ -158,8 +160,12 @@ and no `0.5` or other threshold is selected by this report.
 
 ## 12. Test-Set Protection
 
-No test labels were used, no test probabilities were generated, and no test
-evaluation was performed. Phase 2 reporting contains validation evidence only.
+No test probabilities were generated, no test evaluation was performed, and
+test labels were not used for fitting, scoring, evaluation, or model selection.
+The frozen-input gate reads test labels and timestamps only to verify the
+Month 1 contract structurally (row counts, binary target domain, chronology,
+and the Phase 9 contract fingerprint). Phase 2 reporting contains validation
+evidence only.
 
 ## 13. Phase 3 Readiness
 

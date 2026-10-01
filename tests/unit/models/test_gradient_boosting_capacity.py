@@ -14,10 +14,8 @@ from urban_ops.models.evaluation import (
     rank_by_risk,
 )
 from urban_ops.models.gradient_boosting_capacity import (
-    GRADIENT_BOOSTING_CAPACITY_FILENAME,
     GradientBoostingCapacityResult,
     evaluate_gradient_boosting_validation_capacity,
-    write_gradient_boosting_capacity_table,
 )
 
 
@@ -163,22 +161,6 @@ def test_invalid_scores_fail_through_shared_ranking_validation() -> None:
             inputs,
             np.asarray([0.1, float("nan")]),
         )
-
-
-def test_capacity_artifact_preserves_canonical_table(tmp_path) -> None:
-    y_validation = pd.Series([0, 1] * 10)
-    scores = np.linspace(0.01, 0.99, len(y_validation))
-    result = evaluate_gradient_boosting_validation_capacity(
-        SimpleNamespace(targets={"validation": y_validation}),
-        scores,
-    )
-
-    output_path = write_gradient_boosting_capacity_table(result, tmp_path)
-
-    assert output_path == tmp_path / GRADIENT_BOOSTING_CAPACITY_FILENAME
-    persisted = pd.read_csv(output_path)
-    assert tuple(persisted.columns) == tuple(result.table.columns)
-    assert persisted["capacity"].tolist() == [0.05, 0.10, 0.20]
 
 
 def test_test_labels_are_not_accessed() -> None:

@@ -15,19 +15,16 @@ import pandas as pd
 
 from urban_ops.models.baseline_workflow import EDA_CONFIG_PATH
 from urban_ops.models.evaluation import (
-    CALIBRATION_N_BINS,
     CalibrationEvaluation,
     CapacityComparisonRow,
     CapacityLevel,
     RankingEvaluation,
-    build_calibration_table,
-    compare_capacity_levels,
-    evaluate_calibration,
-    evaluate_ranking,
-    get_standard_capacity_levels,
+)
+from urban_ops.models.gradient_boosting_calibration import (
+    evaluate_gradient_boosting_validation_calibration,
 )
 from urban_ops.models.gradient_boosting_capacity import (
-    build_gradient_boosting_capacity_table,
+    evaluate_gradient_boosting_validation_capacity,
 )
 from urban_ops.models.gradient_boosting_inputs import (
     load_and_verify_gradient_boosting_inputs,
@@ -41,6 +38,9 @@ from urban_ops.models.gradient_boosting_reporting import (
     FrozenLogisticRegressionValidationEvidence,
     write_frozen_logistic_regression_evidence_snapshot,
     write_gradient_boosting_reports,
+)
+from urban_ops.models.gradient_boosting_ranking import (
+    evaluate_gradient_boosting_validation_ranking,
 )
 from urban_ops.models.gradient_boosting_training import (
     GradientBoostingTrainingResult,
@@ -87,26 +87,22 @@ def run_gradient_boosting_workflow(
         training.model,
         inputs,
     )
-    y_validation = inputs.targets["validation"]
-    ranking = evaluate_ranking(y_validation, validation_scores)
-    calibration = evaluate_calibration(y_validation, validation_scores)
-    calibration_table = build_calibration_table(
-        y_validation,
+    # One score array feeds every shared evaluator; each helper reads only
+    # the validation target.
+    ranking = evaluate_gradient_boosting_validation_ranking(inputs, validation_scores)
+    calibration_result = evaluate_gradient_boosting_validation_calibration(
+        inputs,
         validation_scores,
-        n_bins=CALIBRATION_N_BINS,
     )
-    capacity_levels = get_standard_capacity_levels(len(y_validation))
-    capacity = compare_capacity_levels(
-        y_validation,
+    capacity_result = evaluate_gradient_boosting_validation_capacity(
+        inputs,
         validation_scores,
-        capacities=tuple(level.capacity for level in capacity_levels),
     )
-    capacity_table = build_gradient_boosting_capacity_table(capacity)
     report_artifacts = write_gradient_boosting_reports(
         ranking=ranking,
-        calibration=calibration,
-        calibration_table=calibration_table,
-        capacity_table=capacity_table,
+        calibration=calibration_result.calibration,
+        calibration_table=calibration_result.table,
+        capacity_table=capacity_result.table,
         training_row_count=training.metadata.training_row_count,
         feature_count=training.metadata.feature_count,
         split_id=inputs.split_id,
@@ -122,11 +118,11 @@ def run_gradient_boosting_workflow(
         training=training,
         validation_scores=validation_scores,
         ranking=ranking,
-        calibration=calibration,
-        calibration_table=calibration_table,
-        capacity_levels=capacity_levels,
-        capacity=capacity,
-        capacity_table=capacity_table,
+        calibration=calibration_result.calibration,
+        calibration_table=calibration_result.table,
+        capacity_levels=capacity_result.capacity_levels,
+        capacity=capacity_result.comparisons,
+        capacity_table=capacity_result.table,
         feature_names=inputs.feature_names,
         split_id=inputs.split_id,
         frozen_logistic_regression=(

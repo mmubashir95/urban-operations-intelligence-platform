@@ -434,7 +434,8 @@ def test_report_writer_produces_complete_deterministic_phase_2_contract(
         "region-specific under- and over-prediction",
         "threshold selection remains deferred",
         "`0.49` was not transferred",
-        "No test labels were used",
+        "No test probabilities were generated",
+        "test labels were not used for fitting, scoring, evaluation, or model selection",
         "technically ready to proceed to Phase 3",
     ):
         assert fact in markdown

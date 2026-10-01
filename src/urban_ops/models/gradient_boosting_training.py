@@ -7,13 +7,9 @@ selection. Phase 2.1 remains responsible for validating all frozen inputs.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
-from urban_ops.models.baseline_workflow import EDA_CONFIG_PATH, FrozenBaselineInputs
+from urban_ops.models.baseline_workflow import FrozenBaselineInputs
 from urban_ops.models.gradient_boosting import GradientBoostedRiskModel
-from urban_ops.models.gradient_boosting_inputs import (
-    load_and_verify_gradient_boosting_inputs,
-)
 
 
 @dataclass(frozen=True)
@@ -86,16 +82,3 @@ def train_gradient_boosted_risk_model(
         random_state=model.config.random_state,
     )
     return GradientBoostingTrainingResult(model=model, metadata=metadata)
-
-
-def load_and_train_gradient_boosted_risk_model(
-    *,
-    eda_config_path: Path | str = EDA_CONFIG_PATH,
-    split_run_path: Path | None = None,
-) -> GradientBoostingTrainingResult:
-    """Verify frozen Month 1 inputs, then fit exclusively on their train split."""
-    inputs = load_and_verify_gradient_boosting_inputs(
-        eda_config_path=eda_config_path,
-        split_run_path=split_run_path,
-    )
-    return train_gradient_boosted_risk_model(inputs)

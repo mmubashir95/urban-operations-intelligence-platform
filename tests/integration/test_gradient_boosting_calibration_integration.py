@@ -6,7 +6,6 @@ import numpy as np
 
 from urban_ops.models.gradient_boosting_calibration import (
     evaluate_gradient_boosting_validation_calibration,
-    write_gradient_boosting_calibration_table,
 )
 from urban_ops.models.gradient_boosting_inputs import (
     load_and_verify_gradient_boosting_inputs,
@@ -58,10 +57,6 @@ def test_real_pipeline_evaluates_and_persists_raw_validation_calibration(
         evaluation_inputs,
         validation_scores,
     )
-    output_path = write_gradient_boosting_calibration_table(
-        result,
-        tmp_path / "reports" / "month_2",
-    )
 
     assert targets.accessed == ["validation"]
     assert result.calibration.metrics.row_count == len(inputs.targets["validation"])
@@ -70,6 +65,4 @@ def test_real_pipeline_evaluates_and_persists_raw_validation_calibration(
     assert int(result.table["row_count"].sum()) == len(
         inputs.targets["validation"]
     )
-    assert output_path.is_file()
-    assert output_path.name == "phase_2_gradient_boosting_calibration.csv"
     assert bytes(training.model._model.get_booster().save_raw()) == booster_before

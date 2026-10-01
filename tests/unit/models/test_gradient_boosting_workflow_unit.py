@@ -6,7 +6,12 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
-from urban_ops.models import gradient_boosting_workflow
+from urban_ops.models import (
+    gradient_boosting_calibration,
+    gradient_boosting_capacity,
+    gradient_boosting_ranking,
+    gradient_boosting_workflow,
+)
 from urban_ops.models.evaluation import (
     build_calibration_table,
     compare_capacity_levels,
@@ -112,29 +117,29 @@ def test_workflow_reuses_one_validation_score_array_across_evaluators(
         calls.append(("capacity", y_true, y_score, capacities))
         return capacity
 
-    monkeypatch.setattr(gradient_boosting_workflow, "evaluate_ranking", spy_ranking)
+    monkeypatch.setattr(gradient_boosting_ranking, "evaluate_ranking", spy_ranking)
     monkeypatch.setattr(
-        gradient_boosting_workflow,
+        gradient_boosting_calibration,
         "evaluate_calibration",
         spy_calibration,
     )
     monkeypatch.setattr(
-        gradient_boosting_workflow,
+        gradient_boosting_calibration,
         "build_calibration_table",
         spy_calibration_table,
     )
     monkeypatch.setattr(
-        gradient_boosting_workflow,
+        gradient_boosting_capacity,
         "get_standard_capacity_levels",
         lambda count: levels,
     )
     monkeypatch.setattr(
-        gradient_boosting_workflow,
+        gradient_boosting_capacity,
         "compare_capacity_levels",
         spy_capacity,
     )
     monkeypatch.setattr(
-        gradient_boosting_workflow,
+        gradient_boosting_capacity,
         "build_gradient_boosting_capacity_table",
         lambda rows: capacity_table,
     )

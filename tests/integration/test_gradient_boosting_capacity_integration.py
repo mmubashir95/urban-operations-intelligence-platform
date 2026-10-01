@@ -9,7 +9,6 @@ from urban_ops.models.gradient_boosting_calibration import (
 )
 from urban_ops.models.gradient_boosting_capacity import (
     evaluate_gradient_boosting_validation_capacity,
-    write_gradient_boosting_capacity_table,
 )
 from urban_ops.models.gradient_boosting_inputs import (
     load_and_verify_gradient_boosting_inputs,
@@ -70,10 +69,6 @@ def test_real_pipeline_evaluates_and_persists_validation_capacity(tmp_path) -> N
         evaluation_inputs,
         validation_scores,
     )
-    output_path = write_gradient_boosting_capacity_table(
-        capacity,
-        tmp_path / "reports" / "month_2",
-    )
 
     assert targets.accessed == ["validation", "validation", "validation"]
     assert len(validation_scores) == len(inputs.targets["validation"])
@@ -90,6 +85,4 @@ def test_real_pipeline_evaluates_and_persists_validation_capacity(tmp_path) -> N
     assert [row.selected_count for row in capacity.comparisons] == [1, 1, 2]
     assert all(0.0 <= row.precision <= 1.0 for row in capacity.comparisons)
     assert all(0.0 <= row.recall <= 1.0 for row in capacity.comparisons)
-    assert output_path.is_file()
-    assert output_path.name == "phase_2_gradient_boosting_capacity.csv"
     assert bytes(training.model._model.get_booster().save_raw()) == booster_before

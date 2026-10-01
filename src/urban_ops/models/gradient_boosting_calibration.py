@@ -8,7 +8,6 @@ access the test split.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import pandas as pd
 
@@ -27,11 +26,6 @@ class GradientBoostingCalibrationResult:
 
     calibration: CalibrationEvaluation
     table: pd.DataFrame
-
-
-GRADIENT_BOOSTING_CALIBRATION_FILENAME = (
-    "phase_2_gradient_boosting_calibration.csv"
-)
 
 
 def evaluate_gradient_boosting_validation_calibration(
@@ -54,15 +48,3 @@ def evaluate_gradient_boosting_validation_calibration(
         calibration=calibration,
         table=table,
     )
-
-
-def write_gradient_boosting_calibration_table(
-    result: GradientBoostingCalibrationResult,
-    output_directory: Path | str,
-) -> Path:
-    """Persist the canonical shared calibration table as a Month 2 CSV."""
-    directory = Path(output_directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    output_path = directory / GRADIENT_BOOSTING_CALIBRATION_FILENAME
-    result.table.to_csv(output_path, index=False)
-    return output_path

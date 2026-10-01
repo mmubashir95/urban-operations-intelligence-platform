@@ -13,7 +13,6 @@ from urban_ops.models.gradient_boosting import (
     load_gradient_boosting_config,
 )
 from urban_ops.models.gradient_boosting_training import (
-    load_and_train_gradient_boosted_risk_model,
     train_gradient_boosted_risk_model,
 )
 
@@ -96,30 +95,6 @@ def test_orchestration_passes_only_train_objects_and_unchanged_features(
     assert result.model.config == load_gradient_boosting_config()
 
 
-def test_load_and_train_begins_with_phase_2_1_gate(monkeypatch) -> None:
-    inputs = _inputs()
-    calls = []
-
-    def fake_loader(**kwargs):
-        calls.append(kwargs)
-        return inputs
-
-    monkeypatch.setattr(
-        gradient_boosting_training,
-        "load_and_verify_gradient_boosting_inputs",
-        fake_loader,
-    )
-
-    result = load_and_train_gradient_boosted_risk_model(
-        eda_config_path="fixture-eda.yaml"
-    )
-
-    assert calls == [
-        {"eda_config_path": "fixture-eda.yaml", "split_run_path": None}
-    ]
-    assert result.metadata.training_row_count == len(inputs.targets["train"])
-
-
 @pytest.mark.parametrize(
     ("collection", "message"),
     [("matrices", "train matrix"), ("targets", "train target")],
@@ -130,24 +105,6 @@ def test_missing_training_split_fails_clearly(collection: str, message: str) -> 
 
     with pytest.raises(ValueError, match=message):
         train_gradient_boosted_risk_model(inputs)
-
-
-def test_phase_2_1_verification_failure_is_preserved(monkeypatch) -> None:
-    expected = RuntimeError("frozen input contract failed")
-
-    def failing_loader(**kwargs):
-        raise expected
-
-    monkeypatch.setattr(
-        gradient_boosting_training,
-        "load_and_verify_gradient_boosting_inputs",
-        failing_loader,
-    )
-
-    with pytest.raises(RuntimeError, match="frozen input contract failed") as caught:
-        load_and_train_gradient_boosted_risk_model()
-
-    assert caught.value is expected
 
 
 def test_returned_model_is_fitted_and_usable_on_small_train_slice() -> None:

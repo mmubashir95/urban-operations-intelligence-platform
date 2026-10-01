@@ -7,7 +7,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from urban_ops.models import gradient_boosting_workflow
+from urban_ops.models import (
+    gradient_boosting_calibration,
+    gradient_boosting_capacity,
+    gradient_boosting_ranking,
+    gradient_boosting_workflow,
+)
 from urban_ops.models.baselines import LogisticRegressionBaseline
 from urban_ops.models.gradient_boosting import GradientBoostedRiskModel
 from urban_ops.models.gradient_boosting_inputs import (
@@ -130,9 +135,9 @@ def test_dedicated_workflow_uses_train_and_validation_only(
         score_calls.append(X)
         return original_predict_score(model, X)
 
-    original_ranking = gradient_boosting_workflow.evaluate_ranking
-    original_calibration = gradient_boosting_workflow.evaluate_calibration
-    original_capacity = gradient_boosting_workflow.compare_capacity_levels
+    original_ranking = gradient_boosting_ranking.evaluate_ranking
+    original_calibration = gradient_boosting_calibration.evaluate_calibration
+    original_capacity = gradient_boosting_capacity.compare_capacity_levels
 
     def spy_ranking(y_true, y_score):
         evaluation_calls.append(("ranking", y_true, y_score))
@@ -158,17 +163,17 @@ def test_dedicated_workflow_uses_train_and_validation_only(
         spy_predict_score,
     )
     monkeypatch.setattr(
-        gradient_boosting_workflow,
+        gradient_boosting_ranking,
         "evaluate_ranking",
         spy_ranking,
     )
     monkeypatch.setattr(
-        gradient_boosting_workflow,
+        gradient_boosting_calibration,
         "evaluate_calibration",
         spy_calibration,
     )
     monkeypatch.setattr(
-        gradient_boosting_workflow,
+        gradient_boosting_capacity,
         "compare_capacity_levels",
         spy_capacity,
     )
@@ -197,7 +202,8 @@ def test_dedicated_workflow_uses_train_and_validation_only(
     assert len(score_calls) == 1
     assert score_calls[0] is inputs.matrices["validation"]
     assert matrices.accessed == ["train", "validation"]
-    assert targets.accessed == ["train", "validation"]
+    # Ranking, calibration, and capacity helpers each read validation once.
+    assert targets.accessed == ["train", "validation", "validation", "validation"]
     assert [name for name, _, _ in evaluation_calls] == [
         "ranking",
         "calibration",
@@ -275,7 +281,8 @@ def test_dedicated_workflow_uses_train_and_validation_only(
         encoding="utf-8"
     )
     assert "Frozen Logistic Regression Comparison" in markdown_report
-    assert "No test labels were used" in markdown_report
+    assert "No test probabilities were generated" in markdown_report
+    assert "test labels were not used for fitting" in markdown_report
     report_directory = result.report_artifacts.markdown_path.parent
     assert not tuple(report_directory.glob("*gradient_boosting_test*"))
     assert not tuple(report_directory.glob("*phase_2_test*"))
