@@ -1,5 +1,6 @@
 """Unit tests for frozen Month 1 comparison loading and normalization."""
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -17,9 +18,16 @@ from urban_ops.models.gradient_boosting_reporting import (
     COMPARISON_METRICS,
     FrozenLogisticRegressionValidationEvidence,
     build_model_comparison_table,
+    load_frozen_logistic_regression_evidence_snapshot,
     load_frozen_logistic_regression_validation_metrics,
+    write_frozen_logistic_regression_evidence_snapshot,
     write_gradient_boosting_reports,
 )
+
+
+SPLIT_ID = "frozen-split"
+FINGERPRINT = "frozen-phase-9-fingerprint"
+
 
 
 def _frozen_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -59,6 +67,122 @@ def _write_frozen_frames(tmp_path) -> tuple[object, object]:
     validation.to_csv(validation_path, index=False)
     capacity.to_csv(capacity_path, index=False)
     return validation_path, capacity_path
+
+
+def _write_snapshot(tmp_path) -> Path:
+    """Freeze the fixture CSV evidence into a bound JSON snapshot."""
+    validation_path, capacity_path = _write_frozen_frames(tmp_path)
+    return write_frozen_logistic_regression_evidence_snapshot(
+        split_id=SPLIT_ID,
+        phase_9_contract_fingerprint=FINGERPRINT,
+        validation_results_path=validation_path,
+        capacity_results_path=capacity_path,
+        output_path=tmp_path / "snapshot.json",
+    )
+
+
+def test_snapshot_round_trips_csv_evidence_with_split_binding(tmp_path) -> None:
+    validation_path, capacity_path = _write_frozen_frames(tmp_path)
+    from_csv = load_frozen_logistic_regression_validation_metrics(
+        validation_results_path=validation_path,
+        capacity_results_path=capacity_path,
+    )
+    snapshot_path = _write_snapshot(tmp_path)
+
+    evidence = load_frozen_logistic_regression_evidence_snapshot(
+        snapshot_path,
+        expected_split_id=SPLIT_ID,
+        expected_phase_9_contract_fingerprint=FINGERPRINT,
+    )
+
+    assert evidence.metrics == from_csv.metrics
+    assert evidence.row_count == from_csv.row_count
+    assert evidence.positive_count == from_csv.positive_count
+    assert evidence.split_id == SPLIT_ID
+    assert evidence.phase_9_contract_fingerprint == FINGERPRINT
+    assert evidence.snapshot_source == snapshot_path
+
+
+def test_snapshot_is_write_once(tmp_path) -> None:
+    snapshot_path = _write_snapshot(tmp_path)
+    original = snapshot_path.read_bytes()
+
+    # Identical evidence is an idempotent no-op.
+    assert _write_snapshot(tmp_path) == snapshot_path
+
+    validation, capacity = _frozen_frames()
+    validation.assign(pr_auc=0.41).to_csv(tmp_path / "validation.csv", index=False)
+    with pytest.raises(ValueError, match="Refusing to overwrite"):
+        write_frozen_logistic_regression_evidence_snapshot(
+            split_id=SPLIT_ID,
+            phase_9_contract_fingerprint=FINGERPRINT,
+            validation_results_path=tmp_path / "validation.csv",
+            capacity_results_path=tmp_path / "capacity.csv",
+            output_path=snapshot_path,
+        )
+    assert snapshot_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("split_id", "fingerprint", "message"),
+    [
+        ("other-split", FINGERPRINT, "recorded for split"),
+        (SPLIT_ID, "other-fingerprint", "fingerprint"),
+    ],
+)
+def test_snapshot_rejects_mismatched_frozen_inputs(
+    tmp_path,
+    split_id,
+    fingerprint,
+    message,
+) -> None:
+    snapshot_path = _write_snapshot(tmp_path)
+
+    with pytest.raises(ValueError, match=message):
+        load_frozen_logistic_regression_evidence_snapshot(
+            snapshot_path,
+            expected_split_id=split_id,
+            expected_phase_9_contract_fingerprint=fingerprint,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda payload: payload.pop("split_id"), "fields must be exactly"),
+        (lambda payload: payload.update(evaluated_split="test"), "validation only"),
+        (
+            lambda payload: payload["validation"].update(pr_auc=1.5),
+            "PR-AUC must be finite",
+        ),
+        (
+            lambda payload: payload["capacity"][0].update(precision_at_k=0.9),
+            "Precision@5% does not match",
+        ),
+        (lambda payload: payload.update(capacity=[]), "5%, 10%, and 20%"),
+    ],
+)
+def test_tampered_snapshot_fails_clearly(tmp_path, mutation, message) -> None:
+    snapshot_path = _write_snapshot(tmp_path)
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    mutation(payload)
+    snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        load_frozen_logistic_regression_evidence_snapshot(
+            snapshot_path,
+            expected_split_id=SPLIT_ID,
+            expected_phase_9_contract_fingerprint=FINGERPRINT,
+        )
+
+
+def test_missing_snapshot_fails_clearly(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError, match="snapshot does not exist"):
+        load_frozen_logistic_regression_evidence_snapshot(
+            tmp_path / "missing.json",
+            expected_split_id=SPLIT_ID,
+            expected_phase_9_contract_fingerprint=FINGERPRINT,
+        )
 
 
 def test_valid_frozen_evidence_loads_with_normalized_metrics_and_provenance(
@@ -195,7 +319,7 @@ def test_report_writer_produces_complete_deterministic_phase_2_contract(
 ) -> None:
     frozen_directory = tmp_path / "frozen"
     frozen_directory.mkdir()
-    validation_path, capacity_path = _write_frozen_frames(frozen_directory)
+    snapshot_path = _write_snapshot(frozen_directory)
     ranking = RankingEvaluation(
         metrics=RankingMetrics(100, 40, 60, 0.40, 0.55, 0.58),
         curves=RankingCurves((), (), (), (), (), ()),
@@ -239,14 +363,14 @@ def test_report_writer_produces_complete_deterministic_phase_2_contract(
             capacity_table=capacity_table,
             training_row_count=200,
             feature_count=2,
-            split_id="frozen-split",
+            split_id=SPLIT_ID,
+            phase_9_contract_fingerprint=FINGERPRINT,
             model_implementation="XGBoost",
             model_class="GradientBoostedRiskModel",
             configuration_version=1,
             model_configuration=configuration,
             output_directory=tmp_path / directory_name,
-            frozen_validation_path=validation_path,
-            frozen_capacity_path=capacity_path,
+            frozen_evidence_path=snapshot_path,
         )
         outputs.append(artifacts)
 

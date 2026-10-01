@@ -5,6 +5,7 @@ from math import ceil
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from urban_ops.models import gradient_boosting_workflow
 from urban_ops.models.baselines import LogisticRegressionBaseline
@@ -13,7 +14,12 @@ from urban_ops.models.gradient_boosting_inputs import (
     load_and_verify_gradient_boosting_inputs,
 )
 from urban_ops.models.gradient_boosting_reporting import COMPARISON_METRICS
+from urban_ops.models.gradient_boosting_reporting import (
+    load_frozen_logistic_regression_evidence_snapshot,
+    write_frozen_logistic_regression_evidence_snapshot,
+)
 from urban_ops.models.gradient_boosting_workflow import (
+    freeze_logistic_regression_validation_evidence,
     run_gradient_boosting_workflow,
 )
 from tests.unit.eda.conftest import build_eda_fixture, make_eda_frame
@@ -33,8 +39,8 @@ class ProtectedSplits(dict):
         return super().__getitem__(key)
 
 
-def _write_matching_frozen_evidence(tmp_path, inputs):
-    """Write structured frozen evidence aligned to the synthetic validation split."""
+def _write_matching_frozen_csvs(tmp_path, inputs):
+    """Write Month 1-style CSV evidence aligned to the synthetic validation split."""
     y_validation = inputs.targets["validation"]
     row_count = len(y_validation)
     positive_count = int(y_validation.sum())
@@ -67,6 +73,24 @@ def _write_matching_frozen_evidence(tmp_path, inputs):
     return validation_path, capacity_path
 
 
+def _write_matching_frozen_evidence(tmp_path, fixture, inputs):
+    """Freeze synthetic CSV evidence through the real snapshot entry point."""
+    validation_path, capacity_path = _write_matching_frozen_csvs(tmp_path, inputs)
+    snapshot_path = freeze_logistic_regression_validation_evidence(
+        eda_config_path=fixture.config,
+        validation_results_path=validation_path,
+        capacity_results_path=capacity_path,
+        output_path=tmp_path / "frozen_lr_evidence.json",
+    )
+    evidence = load_frozen_logistic_regression_evidence_snapshot(
+        snapshot_path,
+        expected_split_id=inputs.split_id,
+        expected_phase_9_contract_fingerprint=inputs.phase_9_contract.fingerprint,
+    )
+    assert evidence.split_id == inputs.split_id
+    return snapshot_path
+
+
 def test_dedicated_workflow_uses_train_and_validation_only(
     tmp_path,
     monkeypatch,
@@ -79,10 +103,7 @@ def test_dedicated_workflow_uses_train_and_validation_only(
     matrices = ProtectedSplits(inputs.matrices)
     targets = ProtectedSplits(inputs.targets)
     protected_inputs = replace(inputs, matrices=matrices, targets=targets)
-    frozen_validation_path, frozen_capacity_path = _write_matching_frozen_evidence(
-        tmp_path,
-        inputs,
-    )
+    frozen_evidence_path = _write_matching_frozen_evidence(tmp_path, fixture, inputs)
     load_calls = []
     fit_calls = []
     score_calls = []
@@ -162,8 +183,7 @@ def test_dedicated_workflow_uses_train_and_validation_only(
     result = run_gradient_boosting_workflow(
         eda_config_path=fixture.config,
         output_directory=tmp_path / "reports" / "month_2",
-        frozen_validation_path=frozen_validation_path,
-        frozen_capacity_path=frozen_capacity_path,
+        frozen_evidence_path=frozen_evidence_path,
     )
 
     assert load_calls == [
@@ -261,6 +281,11 @@ def test_dedicated_workflow_uses_train_and_validation_only(
     assert not tuple(report_directory.glob("*phase_2_test*"))
     assert result.frozen_logistic_regression.frozen is True
     assert result.frozen_logistic_regression.evaluated_split == "validation"
+    assert result.frozen_logistic_regression.split_id == inputs.split_id
+    assert (
+        result.frozen_logistic_regression.phase_9_contract_fingerprint
+        == inputs.phase_9_contract.fingerprint
+    )
     assert result.frozen_logistic_regression.row_count == len(
         result.validation_scores
     )
@@ -281,21 +306,16 @@ def test_workflow_is_deterministic_for_fixed_configuration(tmp_path) -> None:
         eda_config_path=fixture.config,
         split_run_path=None,
     )
-    frozen_validation_path, frozen_capacity_path = _write_matching_frozen_evidence(
-        tmp_path,
-        inputs,
-    )
+    frozen_evidence_path = _write_matching_frozen_evidence(tmp_path, fixture, inputs)
     first = run_gradient_boosting_workflow(
         eda_config_path=fixture.config,
         output_directory=tmp_path / "first",
-        frozen_validation_path=frozen_validation_path,
-        frozen_capacity_path=frozen_capacity_path,
+        frozen_evidence_path=frozen_evidence_path,
     )
     second = run_gradient_boosting_workflow(
         eda_config_path=fixture.config,
         output_directory=tmp_path / "second",
-        frozen_validation_path=frozen_validation_path,
-        frozen_capacity_path=frozen_capacity_path,
+        frozen_evidence_path=frozen_evidence_path,
     )
 
     np.testing.assert_array_equal(first.validation_scores, second.validation_scores)
@@ -306,3 +326,29 @@ def test_workflow_is_deterministic_for_fixed_configuration(tmp_path) -> None:
     assert first.report_artifacts.comparison.equals(
         second.report_artifacts.comparison
     )
+
+
+def test_workflow_rejects_frozen_evidence_from_a_different_split(tmp_path) -> None:
+    fixture = build_eda_fixture(tmp_path, make_eda_frame())
+    inputs = load_and_verify_gradient_boosting_inputs(
+        eda_config_path=fixture.config,
+        split_run_path=None,
+    )
+    validation_path, capacity_path = _write_matching_frozen_csvs(tmp_path, inputs)
+    # Same population counts, but recorded against another frozen split.
+    stale_snapshot = write_frozen_logistic_regression_evidence_snapshot(
+        split_id="some-other-split",
+        phase_9_contract_fingerprint=inputs.phase_9_contract.fingerprint,
+        validation_results_path=validation_path,
+        capacity_results_path=capacity_path,
+        output_path=tmp_path / "stale_lr_evidence.json",
+    )
+    output_directory = tmp_path / "reports" / "month_2"
+
+    with pytest.raises(ValueError, match="recorded for split"):
+        run_gradient_boosting_workflow(
+            eda_config_path=fixture.config,
+            output_directory=output_directory,
+            frozen_evidence_path=stale_snapshot,
+        )
+    assert not output_directory.exists()

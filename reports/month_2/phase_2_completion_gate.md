@@ -73,10 +73,19 @@ the 6,762-row validation population using the shared ceiling rule.
 
 ## Frozen Logistic Regression Comparison
 
-The comparison reads:
+The comparison reads the tracked, write-once snapshot
+`configs/models/month1_logistic_regression_validation_evidence.json`. That
+snapshot was derived from:
 
 - `reports/tables/baseline_validation_results.csv`
 - `reports/tables/logistic_regression_validation_capacity_comparison.csv`
+
+It is bound to split `20260806T135114Z_9d945cb2da0eecfc` and Phase 9
+fingerprint `d6620d99…2271`. The workflow refuses to report if either differs
+from the frozen inputs it loads. Those identifiers were added after the
+independent review (finding LOW-1). The comparison values themselves are
+unchanged; round-trip float parsing changed only the last digits of some
+values in the comparison CSV.
 
 It compares PR-AUC, ROC-AUC, Brier Score, Precision@5/10/20%, and
 Recall@5/10/20%, with every difference defined as Gradient Boosting minus

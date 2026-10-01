@@ -110,13 +110,18 @@ Full-precision capacity evidence is in
 
 ## 9. Frozen Logistic Regression Comparison
 
-The Logistic Regression values come from frozen Month 1 validation CSV
-evidence. Logistic Regression is not retrained. Gradient Boosting values come
-from the current Month 2 validation workflow, and every difference is
+The Logistic Regression values come from a tracked, write-once snapshot of the
+frozen Month 1 validation evidence. The workflow verifies that the snapshot's
+split ID and Phase 9 contract fingerprint match the inputs it loaded.
+Logistic Regression is not retrained. Gradient Boosting values come from the
+current Month 2 validation workflow, and every difference is
 `Gradient Boosting - Logistic Regression`.
 
-- Validation metrics source: `reports/tables/baseline_validation_results.csv`
-- Capacity metrics source: `reports/tables/logistic_regression_validation_capacity_comparison.csv`
+- Frozen evidence snapshot: `configs/models/month1_logistic_regression_validation_evidence.json`
+- Derived from Month 1 validation metrics: `reports/tables/baseline_validation_results.csv`
+- Derived from Month 1 capacity metrics: `reports/tables/logistic_regression_validation_capacity_comparison.csv`
+- Frozen split ID: `20260806T135114Z_9d945cb2da0eecfc`
+- Phase 9 contract fingerprint: `d6620d99301f80884487140bde487479f58fe72c1e209328524fa27e8b5a2271`
 - Frozen model: `Logistic Regression`
 - Frozen split: `validation`
 

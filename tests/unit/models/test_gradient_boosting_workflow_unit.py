@@ -34,6 +34,7 @@ def test_workflow_reuses_one_validation_score_array_across_evaluators(
         targets={"validation": y_validation},
         feature_names=("feature_a", "feature_b"),
         split_id="frozen-split",
+        phase_9_contract=SimpleNamespace(fingerprint="frozen-fingerprint"),
     )
     training = SimpleNamespace(
         model=SimpleNamespace(
@@ -137,10 +138,16 @@ def test_workflow_reuses_one_validation_score_array_across_evaluators(
         "build_gradient_boosting_capacity_table",
         lambda rows: capacity_table,
     )
+    report_calls = []
+
+    def spy_write_reports(**kwargs):
+        report_calls.append(kwargs)
+        return artifacts
+
     monkeypatch.setattr(
         gradient_boosting_workflow,
         "write_gradient_boosting_reports",
-        lambda **kwargs: artifacts,
+        spy_write_reports,
     )
 
     result = run_gradient_boosting_workflow(output_directory=tmp_path)
@@ -153,6 +160,9 @@ def test_workflow_reuses_one_validation_score_array_across_evaluators(
     assert result.feature_names == inputs.feature_names
     assert result.frozen_logistic_regression is frozen_evidence
     assert result.comparison is artifacts.comparison
+    assert len(report_calls) == 1
+    assert report_calls[0]["split_id"] == "frozen-split"
+    assert report_calls[0]["phase_9_contract_fingerprint"] == "frozen-fingerprint"
     assert calls == [
         ("ranking", y_validation, validation_scores),
         ("calibration", y_validation, validation_scores),

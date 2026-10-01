@@ -1,0 +1,41 @@
+{
+  "snapshot_version": 1,
+  "model": "Logistic Regression",
+  "evaluated_split": "validation",
+  "split_id": "20260806T135114Z_9d945cb2da0eecfc",
+  "phase_9_contract_fingerprint": "d6620d99301f80884487140bde487479f58fe72c1e209328524fa27e8b5a2271",
+  "derived_from": {
+    "validation_results": "reports/tables/baseline_validation_results.csv",
+    "capacity_results": "reports/tables/logistic_regression_validation_capacity_comparison.csv"
+  },
+  "validation": {
+    "row_count": 6762,
+    "positive_count": 2882,
+    "pr_auc": 0.4658888310445576,
+    "roc_auc": 0.5567976133412507,
+    "brier_score": 0.24402547832454147
+  },
+  "capacity": [
+    {
+      "capacity": 0.05,
+      "selected_count": 339,
+      "captured_positive_count": 163,
+      "precision_at_k": 0.4808259587020649,
+      "recall_at_k": 0.05655794587092297
+    },
+    {
+      "capacity": 0.1,
+      "selected_count": 677,
+      "captured_positive_count": 324,
+      "precision_at_k": 0.47858197932053176,
+      "recall_at_k": 0.11242192921582235
+    },
+    {
+      "capacity": 0.2,
+      "selected_count": 1353,
+      "captured_positive_count": 665,
+      "precision_at_k": 0.49150036954915005,
+      "recall_at_k": 0.23074253990284524
+    }
+  ]
+}

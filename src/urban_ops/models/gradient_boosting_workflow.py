@@ -34,10 +34,12 @@ from urban_ops.models.gradient_boosting_inputs import (
 )
 from urban_ops.models.gradient_boosting_reporting import (
     FROZEN_CAPACITY_RESULTS_PATH,
+    FROZEN_LOGISTIC_REGRESSION_EVIDENCE_PATH,
     FROZEN_VALIDATION_RESULTS_PATH,
     MONTH_2_REPORT_DIR,
     GradientBoostingReportArtifacts,
     FrozenLogisticRegressionValidationEvidence,
+    write_frozen_logistic_regression_evidence_snapshot,
     write_gradient_boosting_reports,
 )
 from urban_ops.models.gradient_boosting_training import (
@@ -73,8 +75,7 @@ def run_gradient_boosting_workflow(
     eda_config_path: Path | str = EDA_CONFIG_PATH,
     split_run_path: Path | None = None,
     output_directory: Path | str = MONTH_2_REPORT_DIR,
-    frozen_validation_path: Path | str = FROZEN_VALIDATION_RESULTS_PATH,
-    frozen_capacity_path: Path | str = FROZEN_CAPACITY_RESULTS_PATH,
+    frozen_evidence_path: Path | str = FROZEN_LOGISTIC_REGRESSION_EVIDENCE_PATH,
 ) -> GradientBoostingWorkflowResult:
     """Run train-only fitting and validation-only shared evaluation."""
     inputs = load_and_verify_gradient_boosting_inputs(
@@ -109,13 +110,13 @@ def run_gradient_boosting_workflow(
         training_row_count=training.metadata.training_row_count,
         feature_count=training.metadata.feature_count,
         split_id=inputs.split_id,
+        phase_9_contract_fingerprint=inputs.phase_9_contract.fingerprint,
         model_implementation=training.metadata.implementation,
         model_class=training.metadata.model_class,
         configuration_version=training.metadata.configuration_version,
         model_configuration=training.model.config.model_parameters,
         output_directory=output_directory,
-        frozen_validation_path=frozen_validation_path,
-        frozen_capacity_path=frozen_capacity_path,
+        frozen_evidence_path=frozen_evidence_path,
     )
     return GradientBoostingWorkflowResult(
         training=training,
@@ -136,6 +137,32 @@ def run_gradient_boosting_workflow(
     )
 
 
+def freeze_logistic_regression_validation_evidence(
+    *,
+    eda_config_path: Path | str = EDA_CONFIG_PATH,
+    split_run_path: Path | None = None,
+    validation_results_path: Path | str = FROZEN_VALIDATION_RESULTS_PATH,
+    capacity_results_path: Path | str = FROZEN_CAPACITY_RESULTS_PATH,
+    output_path: Path | str = FROZEN_LOGISTIC_REGRESSION_EVIDENCE_PATH,
+) -> Path:
+    """Snapshot Month 1 LR validation evidence bound to the verified inputs.
+
+    Run once after the Month 1 freeze. Inputs are loaded only to record their
+    split ID and Phase 9 fingerprint; no model is fitted or scored.
+    """
+    inputs = load_and_verify_gradient_boosting_inputs(
+        eda_config_path=eda_config_path,
+        split_run_path=split_run_path,
+    )
+    return write_frozen_logistic_regression_evidence_snapshot(
+        split_id=inputs.split_id,
+        phase_9_contract_fingerprint=inputs.phase_9_contract.fingerprint,
+        validation_results_path=validation_results_path,
+        capacity_results_path=capacity_results_path,
+        output_path=output_path,
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     """Build the dedicated Month 2 workflow command-line interface."""
     parser = argparse.ArgumentParser(
@@ -143,12 +170,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--split-run", type=Path, default=None)
     parser.add_argument("--output-directory", type=Path, default=MONTH_2_REPORT_DIR)
+    parser.add_argument(
+        "--freeze-logistic-regression-evidence",
+        action="store_true",
+        help="Write the one-time frozen Month 1 LR evidence snapshot and exit.",
+    )
     return parser
 
 
 def main() -> None:
     """Run the dedicated workflow from the command line."""
     args = _parser().parse_args()
+    if args.freeze_logistic_regression_evidence:
+        freeze_logistic_regression_validation_evidence(split_run_path=args.split_run)
+        return
     run_gradient_boosting_workflow(
         split_run_path=args.split_run,
         output_directory=args.output_directory,

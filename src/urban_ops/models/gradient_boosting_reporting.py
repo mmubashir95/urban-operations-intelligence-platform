@@ -1,11 +1,15 @@
 """Build Month 2 Gradient Boosting reports from completed evaluations.
 
-This module formats and persists validation-only evidence. It reads frozen
-Month 1 Logistic Regression CSV artifacts and never trains or scores a model.
+This module formats and persists validation-only evidence. Frozen Month 1
+Logistic Regression metrics come from a tracked, write-once JSON snapshot that
+is bound to the frozen split and Phase 9 contract. The regenerable Month 1 CSV
+artifacts are read only to create that snapshot. No model is trained or scored.
 """
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import ceil, isclose
 from pathlib import Path
@@ -26,6 +30,11 @@ FROZEN_CAPACITY_RESULTS_PATH: Final = (
     PROJECT_ROOT
     / "reports/tables/logistic_regression_validation_capacity_comparison.csv"
 )
+FROZEN_LOGISTIC_REGRESSION_EVIDENCE_PATH: Final = (
+    PROJECT_ROOT / "configs/models/month1_logistic_regression_validation_evidence.json"
+)
+EVIDENCE_SNAPSHOT_VERSION: Final = 1
+STANDARD_CAPACITIES: Final = (0.05, 0.10, 0.20)
 LOGISTIC_REGRESSION_MODEL_NAME: Final = "Logistic Regression"
 GRADIENT_BOOSTING_MODEL_NAME: Final = "Gradient Boosting"
 COMPARISON_METRICS: Final = (
@@ -53,6 +62,9 @@ class FrozenLogisticRegressionValidationEvidence:
     row_count: int
     positive_count: int
     metrics: tuple[tuple[str, float], ...]
+    split_id: str | None = None
+    phase_9_contract_fingerprint: str | None = None
+    snapshot_source: Path | None = None
 
     def metric_values(self) -> dict[str, float]:
         """Return canonical metric names mapped to full-precision values."""
@@ -80,7 +92,8 @@ def _read_frozen_csv(path: Path | str, *, artifact_name: str) -> pd.DataFrame:
             f"Frozen {artifact_name} artifact does not exist: {artifact_path}"
         )
     try:
-        return pd.read_csv(artifact_path)
+        # round_trip parsing keeps frozen floats identical to the written text.
+        return pd.read_csv(artifact_path, float_precision="round_trip")
     except (OSError, pd.errors.ParserError) as exc:
         raise ValueError(
             f"Frozen {artifact_name} artifact is not a readable CSV: {artifact_path}"
@@ -175,13 +188,34 @@ def load_frozen_logistic_regression_validation_metrics(
         raise ValueError("Frozen capacity evidence must contain Logistic Regression.")
     if capacity["evaluated_split"].tolist() != ["validation"] * 3:
         raise ValueError("Frozen capacity evidence must use validation only.")
-    if capacity["capacity"].tolist() != [0.05, 0.10, 0.20]:
+    row_count, positive_count, metrics = _normalize_frozen_evidence(
+        row.iloc[0].to_dict(),
+        capacity.to_dict(orient="records"),
+    )
+    return FrozenLogisticRegressionValidationEvidence(
+        model_name=LOGISTIC_REGRESSION_MODEL_NAME,
+        evaluated_split="validation",
+        frozen=True,
+        validation_source=validation_path,
+        capacity_source=capacity_path,
+        row_count=row_count,
+        positive_count=positive_count,
+        metrics=metrics,
+    )
+
+
+def _normalize_frozen_evidence(
+    validation_row: Mapping[str, object],
+    capacity_rows: Sequence[Mapping[str, object]],
+) -> tuple[int, int, tuple[tuple[str, float], ...]]:
+    """Validate frozen counts and metrics, returning canonical metric pairs."""
+    capacities = [row.get("capacity") for row in capacity_rows]
+    if capacities != list(STANDARD_CAPACITIES):
         raise ValueError("Frozen capacity evidence must use 5%, 10%, and 20%.")
-    validation_row = row.iloc[0]
     try:
         row_count = int(validation_row["row_count"])
         positive_count = int(validation_row["positive_count"])
-    except (TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(
             "Frozen validation population counts must be integers."
         ) from exc
@@ -189,23 +223,25 @@ def load_frozen_logistic_regression_validation_metrics(
         raise ValueError("Frozen validation population counts are invalid.")
 
     normalized = [
-        ("PR-AUC", _finite_unit_metric(validation_row["pr_auc"], metric="PR-AUC")),
+        ("PR-AUC", _finite_unit_metric(validation_row.get("pr_auc"), metric="PR-AUC")),
         (
             "ROC-AUC",
-            _finite_unit_metric(validation_row["roc_auc"], metric="ROC-AUC"),
+            _finite_unit_metric(validation_row.get("roc_auc"), metric="ROC-AUC"),
         ),
         (
             "Brier Score",
-            _finite_unit_metric(validation_row["brier_score"], metric="Brier Score"),
+            _finite_unit_metric(
+                validation_row.get("brier_score"), metric="Brier Score"
+            ),
         ),
     ]
-    for capacity_row in capacity.itertuples(index=False):
-        fraction = float(capacity_row.capacity)
+    for capacity_row in capacity_rows:
+        fraction = float(capacity_row["capacity"])
         label = f"{fraction:.0%}"
         try:
-            selected_count = int(capacity_row.selected_count)
-            captured_count = int(capacity_row.captured_positive_count)
-        except (TypeError, ValueError) as exc:
+            selected_count = int(capacity_row["selected_count"])
+            captured_count = int(capacity_row["captured_positive_count"])
+        except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("Frozen capacity counts must be integers.") from exc
         if selected_count != ceil(row_count * fraction):
             raise ValueError(
@@ -215,11 +251,11 @@ def load_frozen_logistic_regression_validation_metrics(
         if not 0 <= captured_count <= min(selected_count, positive_count):
             raise ValueError(f"Frozen captured-positive count is invalid at {label}.")
         precision = _finite_unit_metric(
-            capacity_row.precision_at_k,
+            capacity_row.get("precision_at_k"),
             metric=f"Precision@{label}",
         )
         recall = _finite_unit_metric(
-            capacity_row.recall_at_k,
+            capacity_row.get("recall_at_k"),
             metric=f"Recall@{label}",
         )
         if not isclose(
@@ -240,15 +276,168 @@ def load_frozen_logistic_regression_validation_metrics(
         )
     if tuple(metric for metric, _ in normalized) != COMPARISON_METRICS:
         raise ValueError("Frozen evidence does not provide all comparison metrics.")
+    return row_count, positive_count, tuple(normalized)
+
+
+def _snapshot_payload(
+    *,
+    validation_path: Path,
+    capacity_path: Path,
+    split_id: str,
+    phase_9_contract_fingerprint: str,
+) -> dict[str, object]:
+    """Extract the validated Month 1 LR rows into the snapshot schema."""
+    # Loading first applies every structural and count-consistency check.
+    load_frozen_logistic_regression_validation_metrics(
+        validation_results_path=validation_path,
+        capacity_results_path=capacity_path,
+    )
+    validation = _read_frozen_csv(validation_path, artifact_name="validation results")
+    capacity = _read_frozen_csv(capacity_path, artifact_name="capacity results")
+    row = validation.loc[
+        validation["model"].eq(LOGISTIC_REGRESSION_MODEL_NAME)
+        & validation["evaluated_split"].eq("validation")
+    ].iloc[0]
+    return {
+        "snapshot_version": EVIDENCE_SNAPSHOT_VERSION,
+        "model": LOGISTIC_REGRESSION_MODEL_NAME,
+        "evaluated_split": "validation",
+        "split_id": split_id,
+        "phase_9_contract_fingerprint": phase_9_contract_fingerprint,
+        "derived_from": {
+            "validation_results": _artifact_display_path(validation_path),
+            "capacity_results": _artifact_display_path(capacity_path),
+        },
+        "validation": {
+            "row_count": int(row["row_count"]),
+            "positive_count": int(row["positive_count"]),
+            "pr_auc": float(row["pr_auc"]),
+            "roc_auc": float(row["roc_auc"]),
+            "brier_score": float(row["brier_score"]),
+        },
+        "capacity": [
+            {
+                "capacity": float(capacity_row["capacity"]),
+                "selected_count": int(capacity_row["selected_count"]),
+                "captured_positive_count": int(
+                    capacity_row["captured_positive_count"]
+                ),
+                "precision_at_k": float(capacity_row["precision_at_k"]),
+                "recall_at_k": float(capacity_row["recall_at_k"]),
+            }
+            for capacity_row in capacity.to_dict(orient="records")
+        ],
+    }
+
+
+def write_frozen_logistic_regression_evidence_snapshot(
+    *,
+    split_id: str,
+    phase_9_contract_fingerprint: str,
+    validation_results_path: Path | str = FROZEN_VALIDATION_RESULTS_PATH,
+    capacity_results_path: Path | str = FROZEN_CAPACITY_RESULTS_PATH,
+    output_path: Path | str = FROZEN_LOGISTIC_REGRESSION_EVIDENCE_PATH,
+) -> Path:
+    """Freeze validated Month 1 LR evidence once, bound to its split and contract.
+
+    The snapshot is write-once: re-running with identical evidence is a no-op,
+    while different evidence raises instead of silently replacing the record.
+    """
+    if not split_id or not phase_9_contract_fingerprint:
+        raise ValueError("Snapshot requires a split_id and Phase 9 fingerprint.")
+    payload = _snapshot_payload(
+        validation_path=Path(validation_results_path),
+        capacity_path=Path(capacity_results_path),
+        split_id=split_id,
+        phase_9_contract_fingerprint=phase_9_contract_fingerprint,
+    )
+    text = json.dumps(payload, indent=2) + "\n"
+    path = Path(output_path)
+    if path.exists():
+        if path.read_text(encoding="utf-8") != text:
+            raise ValueError(
+                "Refusing to overwrite the frozen Logistic Regression evidence "
+                f"snapshot with different content: {path}"
+            )
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def load_frozen_logistic_regression_evidence_snapshot(
+    path: Path | str = FROZEN_LOGISTIC_REGRESSION_EVIDENCE_PATH,
+    *,
+    expected_split_id: str,
+    expected_phase_9_contract_fingerprint: str,
+) -> FrozenLogisticRegressionValidationEvidence:
+    """Load the tracked LR snapshot and require it to match the current inputs."""
+    snapshot_path = Path(path)
+    if not snapshot_path.is_file():
+        raise FileNotFoundError(
+            "Frozen Logistic Regression evidence snapshot does not exist: "
+            f"{snapshot_path}"
+        )
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"Frozen Logistic Regression evidence snapshot is invalid: {snapshot_path}"
+        ) from exc
+    expected_keys = {
+        "snapshot_version",
+        "model",
+        "evaluated_split",
+        "split_id",
+        "phase_9_contract_fingerprint",
+        "derived_from",
+        "validation",
+        "capacity",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise ValueError(
+            f"Frozen evidence snapshot fields must be exactly {sorted(expected_keys)}."
+        )
+    if payload["snapshot_version"] != EVIDENCE_SNAPSHOT_VERSION:
+        raise ValueError("Frozen evidence snapshot_version must be 1.")
+    if payload["model"] != LOGISTIC_REGRESSION_MODEL_NAME:
+        raise ValueError("Frozen evidence snapshot must describe Logistic Regression.")
+    if payload["evaluated_split"] != "validation":
+        raise ValueError("Frozen evidence snapshot must use validation only.")
+    if payload["split_id"] != expected_split_id:
+        raise ValueError(
+            "Frozen Logistic Regression evidence was recorded for split "
+            f"{payload['split_id']!r}, but the workflow loaded {expected_split_id!r}."
+        )
+    if payload["phase_9_contract_fingerprint"] != expected_phase_9_contract_fingerprint:
+        raise ValueError(
+            "Frozen Logistic Regression evidence does not match the current "
+            "Phase 9 modelling contract fingerprint."
+        )
+    derived_from = payload["derived_from"]
+    if (
+        not isinstance(derived_from, dict)
+        or not isinstance(payload["validation"], dict)
+        or not isinstance(payload["capacity"], list)
+        or not all(isinstance(row, dict) for row in payload["capacity"])
+    ):
+        raise ValueError("Frozen evidence snapshot structure is invalid.")
+    row_count, positive_count, metrics = _normalize_frozen_evidence(
+        payload["validation"],
+        payload["capacity"],
+    )
     return FrozenLogisticRegressionValidationEvidence(
         model_name=LOGISTIC_REGRESSION_MODEL_NAME,
         evaluated_split="validation",
         frozen=True,
-        validation_source=validation_path,
-        capacity_source=capacity_path,
+        validation_source=Path(str(derived_from.get("validation_results", ""))),
+        capacity_source=Path(str(derived_from.get("capacity_results", ""))),
         row_count=row_count,
         positive_count=positive_count,
-        metrics=tuple(normalized),
+        metrics=metrics,
+        split_id=payload["split_id"],
+        phase_9_contract_fingerprint=payload["phase_9_contract_fingerprint"],
+        snapshot_source=snapshot_path,
     )
 
 
@@ -382,6 +571,11 @@ def _markdown_report(
     capacity_source = _artifact_display_path(
         frozen_logistic_regression.capacity_source
     )
+    snapshot_source = (
+        "not recorded"
+        if frozen_logistic_regression.snapshot_source is None
+        else _artifact_display_path(frozen_logistic_regression.snapshot_source)
+    )
     configuration_lines = "\n".join(
         f"| `{name}` | `{value}` |" for name, value in model_configuration.items()
     )
@@ -491,13 +685,18 @@ Full-precision capacity evidence is in
 
 ## 9. Frozen Logistic Regression Comparison
 
-The Logistic Regression values come from frozen Month 1 validation CSV
-evidence. Logistic Regression is not retrained. Gradient Boosting values come
-from the current Month 2 validation workflow, and every difference is
+The Logistic Regression values come from a tracked, write-once snapshot of the
+frozen Month 1 validation evidence. The workflow verifies that the snapshot's
+split ID and Phase 9 contract fingerprint match the inputs it loaded.
+Logistic Regression is not retrained. Gradient Boosting values come from the
+current Month 2 validation workflow, and every difference is
 `Gradient Boosting - Logistic Regression`.
 
-- Validation metrics source: `{validation_source}`
-- Capacity metrics source: `{capacity_source}`
+- Frozen evidence snapshot: `{snapshot_source}`
+- Derived from Month 1 validation metrics: `{validation_source}`
+- Derived from Month 1 capacity metrics: `{capacity_source}`
+- Frozen split ID: `{frozen_logistic_regression.split_id}`
+- Phase 9 contract fingerprint: `{frozen_logistic_regression.phase_9_contract_fingerprint}`
 - Frozen model: `{frozen_logistic_regression.model_name}`
 - Frozen split: `{frozen_logistic_regression.evaluated_split}`
 
@@ -554,18 +753,19 @@ def write_gradient_boosting_reports(
     training_row_count: int,
     feature_count: int,
     split_id: str,
+    phase_9_contract_fingerprint: str,
     model_implementation: str,
     model_class: str,
     configuration_version: int,
     model_configuration: Mapping[str, object],
     output_directory: Path | str = MONTH_2_REPORT_DIR,
-    frozen_validation_path: Path | str = FROZEN_VALIDATION_RESULTS_PATH,
-    frozen_capacity_path: Path | str = FROZEN_CAPACITY_RESULTS_PATH,
+    frozen_evidence_path: Path | str = FROZEN_LOGISTIC_REGRESSION_EVIDENCE_PATH,
 ) -> GradientBoostingReportArtifacts:
     """Write all Phase 2 validation reports from completed workflow results."""
-    frozen_logistic_regression = load_frozen_logistic_regression_validation_metrics(
-        validation_results_path=frozen_validation_path,
-        capacity_results_path=frozen_capacity_path,
+    frozen_logistic_regression = load_frozen_logistic_regression_evidence_snapshot(
+        frozen_evidence_path,
+        expected_split_id=split_id,
+        expected_phase_9_contract_fingerprint=phase_9_contract_fingerprint,
     )
     validation = _validation_table(ranking, calibration)
     comparison = build_model_comparison_table(
