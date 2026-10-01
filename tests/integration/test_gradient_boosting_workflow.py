@@ -1,15 +1,18 @@
 """Integration tests for the dedicated Month 2 Gradient Boosting workflow."""
 
 from dataclasses import replace
+from math import ceil
 
 import numpy as np
 import pandas as pd
 
 from urban_ops.models import gradient_boosting_workflow
 from urban_ops.models.baselines import LogisticRegressionBaseline
+from urban_ops.models.gradient_boosting import GradientBoostedRiskModel
 from urban_ops.models.gradient_boosting_inputs import (
     load_and_verify_gradient_boosting_inputs,
 )
+from urban_ops.models.gradient_boosting_reporting import COMPARISON_METRICS
 from urban_ops.models.gradient_boosting_workflow import (
     run_gradient_boosting_workflow,
 )
@@ -81,15 +84,60 @@ def test_dedicated_workflow_uses_train_and_validation_only(
         inputs,
     )
     load_calls = []
+    fit_calls = []
+    evaluation_calls = []
 
     def load_inputs(**kwargs):
         load_calls.append(kwargs)
         return protected_inputs
 
+    original_fit = GradientBoostedRiskModel.fit
+
+    def spy_fit(model, X_train, y_train, *, feature_names):
+        fit_calls.append((X_train, y_train, tuple(feature_names)))
+        return original_fit(
+            model,
+            X_train,
+            y_train,
+            feature_names=feature_names,
+        )
+
+    original_ranking = gradient_boosting_workflow.evaluate_ranking
+    original_calibration = gradient_boosting_workflow.evaluate_calibration
+    original_capacity = gradient_boosting_workflow.compare_capacity_levels
+
+    def spy_ranking(y_true, y_score):
+        evaluation_calls.append(("ranking", y_true, y_score))
+        return original_ranking(y_true, y_score)
+
+    def spy_calibration(y_true, y_score):
+        evaluation_calls.append(("calibration", y_true, y_score))
+        return original_calibration(y_true, y_score)
+
+    def spy_capacity(y_true, y_score, *, capacities):
+        evaluation_calls.append(("capacity", y_true, y_score))
+        return original_capacity(y_true, y_score, capacities=capacities)
+
     monkeypatch.setattr(
         gradient_boosting_workflow,
         "load_and_verify_gradient_boosting_inputs",
         load_inputs,
+    )
+    monkeypatch.setattr(GradientBoostedRiskModel, "fit", spy_fit)
+    monkeypatch.setattr(
+        gradient_boosting_workflow,
+        "evaluate_ranking",
+        spy_ranking,
+    )
+    monkeypatch.setattr(
+        gradient_boosting_workflow,
+        "evaluate_calibration",
+        spy_calibration,
+    )
+    monkeypatch.setattr(
+        gradient_boosting_workflow,
+        "compare_capacity_levels",
+        spy_capacity,
     )
     monkeypatch.setattr(
         LogisticRegressionBaseline,
@@ -109,36 +157,97 @@ def test_dedicated_workflow_uses_train_and_validation_only(
     assert load_calls == [
         {"eda_config_path": fixture.config, "split_run_path": None}
     ]
+    assert len(fit_calls) == 1
+    fitted_matrix, fitted_target, fitted_names = fit_calls[0]
+    assert fitted_matrix is inputs.matrices["train"]
+    assert fitted_target is inputs.targets["train"]
+    assert fitted_names == inputs.feature_names
     assert matrices.accessed == ["train", "validation"]
     assert targets.accessed == ["train", "validation"]
+    assert [name for name, _, _ in evaluation_calls] == [
+        "ranking",
+        "calibration",
+        "capacity",
+    ]
+    for _, evaluated_target, evaluated_scores in evaluation_calls:
+        assert evaluated_target is inputs.targets["validation"]
+        assert evaluated_scores is result.validation_scores
     assert result.training.metadata.training_split == "train"
     assert result.training.metadata.feature_names == inputs.feature_names
     assert result.feature_names == inputs.feature_names
     assert len(result.validation_scores) == len(inputs.targets["validation"])
     assert result.ranking.metrics.row_count == len(result.validation_scores)
     assert result.calibration.metrics.row_count == len(result.validation_scores)
+    validation_count = len(inputs.targets["validation"])
     assert [row.capacity for row in result.capacity] == [0.05, 0.10, 0.20]
-    assert result.report_artifacts.validation_path.is_file()
-    assert result.report_artifacts.calibration_path.is_file()
-    assert result.report_artifacts.capacity_path.is_file()
-    assert result.report_artifacts.comparison_path.is_file()
-    assert result.report_artifacts.markdown_path.is_file()
+    assert [row.selected_count for row in result.capacity] == [
+        ceil(validation_count * capacity) for capacity in (0.05, 0.10, 0.20)
+    ]
+    assert all(row.selected_count <= validation_count for row in result.capacity)
+
+    artifact_paths = (
+        result.report_artifacts.validation_path,
+        result.report_artifacts.calibration_path,
+        result.report_artifacts.capacity_path,
+        result.report_artifacts.comparison_path,
+        result.report_artifacts.markdown_path,
+    )
+    assert all(path.is_file() and path.stat().st_size > 0 for path in artifact_paths)
+
+    validation_report = pd.read_csv(result.report_artifacts.validation_path)
+    assert {
+        "model",
+        "evaluated_split",
+        "pr_auc",
+        "roc_auc",
+        "brier_score",
+    }.issubset(validation_report.columns)
+    assert validation_report.loc[0, "evaluated_split"] == "validation"
+    validation_metrics = validation_report.loc[
+        0, ["pr_auc", "roc_auc", "brier_score"]
+    ].to_numpy(dtype=float)
+    assert np.isfinite(validation_metrics).all()
+    assert ((validation_metrics >= 0.0) & (validation_metrics <= 1.0)).all()
+
+    capacity_report = pd.read_csv(result.report_artifacts.capacity_path)
+    assert capacity_report["capacity"].tolist() == [0.05, 0.10, 0.20]
+    assert capacity_report["selected_count"].tolist() == [
+        ceil(validation_count * capacity) for capacity in (0.05, 0.10, 0.20)
+    ]
+    operational_metrics = capacity_report[
+        ["precision_at_k", "recall_at_k"]
+    ].to_numpy(dtype=float)
+    assert np.isfinite(operational_metrics).all()
+    assert ((operational_metrics >= 0.0) & (operational_metrics <= 1.0)).all()
+
+    comparison_report = pd.read_csv(result.report_artifacts.comparison_path)
+    assert comparison_report["metric"].tolist() == list(COMPARISON_METRICS)
+    assert {
+        "logistic_regression",
+        "gradient_boosting",
+        "difference_gb_minus_lr",
+    }.issubset(comparison_report.columns)
+    assert np.isfinite(
+        comparison_report[
+            [
+                "logistic_regression",
+                "gradient_boosting",
+                "difference_gb_minus_lr",
+            ]
+        ].to_numpy(dtype=float)
+    ).all()
+
+    markdown_report = result.report_artifacts.markdown_path.read_text(
+        encoding="utf-8"
+    )
+    assert "Frozen Logistic Regression Comparison" in markdown_report
+    assert "No test labels were used" in markdown_report
     assert result.frozen_logistic_regression.frozen is True
     assert result.frozen_logistic_regression.evaluated_split == "validation"
     assert result.frozen_logistic_regression.row_count == len(
         result.validation_scores
     )
-    assert result.comparison["metric"].tolist() == [
-        "PR-AUC",
-        "ROC-AUC",
-        "Brier Score",
-        "Precision@5%",
-        "Recall@5%",
-        "Precision@10%",
-        "Recall@10%",
-        "Precision@20%",
-        "Recall@20%",
-    ]
+    assert result.comparison["metric"].tolist() == list(COMPARISON_METRICS)
     expected_difference = (
         result.comparison["gradient_boosting"]
         - result.comparison["logistic_regression"]

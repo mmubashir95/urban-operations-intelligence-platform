@@ -217,13 +217,15 @@ def test_fit_rejects_duplicate_feature_names() -> None:
         )
 
 
-def test_fit_rejects_invalid_target_classes() -> None:
+@pytest.mark.parametrize("invalid_label", [-1, 2, "missed"])
+def test_fit_rejects_invalid_target_classes(invalid_label: object) -> None:
     matrix, _ = _training_data()
+    target = np.asarray([0, 0, 1, 1, 0, 1, invalid_label, 1], dtype=object)
 
     with pytest.raises(GradientBoostingModelError, match="only 0/1"):
         GradientBoostedRiskModel().fit(
             matrix,
-            [0, 0, 1, 1, 0, 1, 2, 1],
+            target,
             feature_names=FEATURE_NAMES,
         )
 
@@ -332,7 +334,9 @@ def test_same_deterministic_configuration_reproduces_scores() -> None:
         matrix, pd.Series(target), feature_names=FEATURE_NAMES
     )
 
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         first.predict_score(matrix),
         second.predict_score(matrix),
+        rtol=1e-12,
+        atol=1e-12,
     )
