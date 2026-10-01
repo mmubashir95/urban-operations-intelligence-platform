@@ -37,6 +37,7 @@ from urban_ops.models.gradient_boosting_reporting import (
     FROZEN_VALIDATION_RESULTS_PATH,
     MONTH_2_REPORT_DIR,
     GradientBoostingReportArtifacts,
+    FrozenLogisticRegressionValidationEvidence,
     write_gradient_boosting_reports,
 )
 from urban_ops.models.gradient_boosting_training import (
@@ -62,6 +63,8 @@ class GradientBoostingWorkflowResult:
     capacity_table: pd.DataFrame
     feature_names: tuple[str, ...]
     split_id: str
+    frozen_logistic_regression: FrozenLogisticRegressionValidationEvidence
+    comparison: pd.DataFrame
     report_artifacts: GradientBoostingReportArtifacts
 
 
@@ -121,6 +124,10 @@ def run_gradient_boosting_workflow(
         capacity_table=capacity_table,
         feature_names=inputs.feature_names,
         split_id=inputs.split_id,
+        frozen_logistic_regression=(
+            report_artifacts.frozen_logistic_regression
+        ),
+        comparison=report_artifacts.comparison,
         report_artifacts=report_artifacts,
     )
 

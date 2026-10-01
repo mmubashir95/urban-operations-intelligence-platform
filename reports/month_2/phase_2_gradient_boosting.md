@@ -57,8 +57,15 @@ selected.
 
 ## Frozen Logistic Regression comparison
 
-The comparison below loads frozen Month 1 CSV evidence. Logistic Regression is
-not retrained by this workflow.
+The Logistic Regression values come from frozen Month 1 validation CSV
+evidence. Logistic Regression is not retrained. Gradient Boosting values come
+from the current Month 2 validation workflow, and every difference is
+`Gradient Boosting - Logistic Regression`.
+
+- Validation metrics source: `reports/tables/baseline_validation_results.csv`
+- Capacity metrics source: `reports/tables/logistic_regression_validation_capacity_comparison.csv`
+- Frozen model: `Logistic Regression`
+- Frozen split: `validation`
 
 | Metric | Logistic Regression | Gradient Boosting | Difference (GB − LR) |
 |---|---:|---:|---:|
@@ -72,6 +79,7 @@ not retrained by this workflow.
 | Precision@20% | 0.4915 | 0.4523 | -0.0392 |
 | Recall@20% | 0.2307 | 0.2124 | -0.0184 |
 
-The comparison is evidence, not final model selection. No tuning, probability
-calibration transformation, threshold selection, or test-set evaluation occurs
-in this workflow.
+The initial Gradient Boosting configuration has lower validation PR-AUC and ROC-AUC than the frozen Logistic Regression benchmark. Gradient Boosting also has a slightly higher Brier Score, indicating slightly higher validation probability error. This evidence does not establish
+that either model is universally better. No tuning, probability calibration
+transformation, threshold selection, or test-set evaluation occurs in this
+workflow.

@@ -197,3 +197,21 @@ threshold, and never scores or evaluates the test split. Run it with:
 ```bash
 make gradient-boosting-resolution-risk
 ```
+
+## Phase 2.12 frozen Logistic Regression comparison
+
+The Month 2 reporting layer loads Logistic Regression validation metrics from
+the authoritative structured Month 1 artifacts:
+
+- `reports/tables/baseline_validation_results.csv` for PR-AUC, ROC-AUC, and
+  Brier Score.
+- `reports/tables/logistic_regression_validation_capacity_comparison.csv` for
+  Precision@K and Recall@K at 5%, 10%, and 20% capacity.
+
+The loader validates artifact existence, required columns, model identity,
+validation split provenance, finite unit-interval metrics, standard capacities,
+and reconciliation of selected/captured counts with the frozen validation
+population. It returns typed frozen evidence with source paths and normalized
+metric names. The workflow compares those values with its current validation
+results using `Gradient Boosting - Logistic Regression` for every metric,
+including Brier Score. Logistic Regression is not retrained or rescored.

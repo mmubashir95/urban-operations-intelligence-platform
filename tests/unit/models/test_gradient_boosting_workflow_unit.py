@@ -15,6 +15,7 @@ from urban_ops.models.evaluation import (
     get_standard_capacity_levels,
 )
 from urban_ops.models.gradient_boosting_reporting import (
+    FrozenLogisticRegressionValidationEvidence,
     GradientBoostingReportArtifacts,
 )
 from urban_ops.models.gradient_boosting_workflow import (
@@ -50,12 +51,23 @@ def test_workflow_reuses_one_validation_score_array_across_evaluators(
             "selected_count": [1, 1, 1],
         }
     )
+    frozen_evidence = FrozenLogisticRegressionValidationEvidence(
+        model_name="Logistic Regression",
+        evaluated_split="validation",
+        frozen=True,
+        validation_source=tmp_path / "frozen_validation.csv",
+        capacity_source=tmp_path / "frozen_capacity.csv",
+        row_count=4,
+        positive_count=2,
+        metrics=(),
+    )
     artifacts = GradientBoostingReportArtifacts(
         validation_path=tmp_path / "validation.csv",
         calibration_path=tmp_path / "calibration.csv",
         capacity_path=tmp_path / "capacity.csv",
         comparison_path=tmp_path / "comparison.csv",
         markdown_path=tmp_path / "report.md",
+        frozen_logistic_regression=frozen_evidence,
         comparison=pd.DataFrame(),
     )
 
@@ -131,6 +143,8 @@ def test_workflow_reuses_one_validation_score_array_across_evaluators(
     assert result.calibration is calibration
     assert result.capacity is capacity
     assert result.feature_names == inputs.feature_names
+    assert result.frozen_logistic_regression is frozen_evidence
+    assert result.comparison is artifacts.comparison
     assert calls == [
         ("ranking", y_validation, validation_scores),
         ("calibration", y_validation, validation_scores),

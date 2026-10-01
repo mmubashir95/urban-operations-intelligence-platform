@@ -7,9 +7,11 @@ Month 1 Logistic Regression CSV artifacts and never trains or scores a model.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import ceil, isclose
 from pathlib import Path
 from typing import Final
 
+import numpy as np
 import pandas as pd
 
 from urban_ops.models.evaluation import CalibrationEvaluation, RankingEvaluation
@@ -26,6 +28,35 @@ FROZEN_CAPACITY_RESULTS_PATH: Final = (
 )
 LOGISTIC_REGRESSION_MODEL_NAME: Final = "Logistic Regression"
 GRADIENT_BOOSTING_MODEL_NAME: Final = "Gradient Boosting"
+COMPARISON_METRICS: Final = (
+    "PR-AUC",
+    "ROC-AUC",
+    "Brier Score",
+    "Precision@5%",
+    "Recall@5%",
+    "Precision@10%",
+    "Recall@10%",
+    "Precision@20%",
+    "Recall@20%",
+)
+
+
+@dataclass(frozen=True)
+class FrozenLogisticRegressionValidationEvidence:
+    """Validated and normalized frozen Month 1 validation metrics."""
+
+    model_name: str
+    evaluated_split: str
+    frozen: bool
+    validation_source: Path
+    capacity_source: Path
+    row_count: int
+    positive_count: int
+    metrics: tuple[tuple[str, float], ...]
+
+    def metric_values(self) -> dict[str, float]:
+        """Return canonical metric names mapped to full-precision values."""
+        return dict(self.metrics)
 
 
 @dataclass(frozen=True)
@@ -37,17 +68,100 @@ class GradientBoostingReportArtifacts:
     capacity_path: Path
     comparison_path: Path
     markdown_path: Path
+    frozen_logistic_regression: FrozenLogisticRegressionValidationEvidence
     comparison: pd.DataFrame
 
 
-def load_frozen_logistic_regression_evidence(
+def _read_frozen_csv(path: Path | str, *, artifact_name: str) -> pd.DataFrame:
+    """Read one required structured frozen artifact or fail clearly."""
+    artifact_path = Path(path)
+    if not artifact_path.is_file():
+        raise FileNotFoundError(
+            f"Frozen {artifact_name} artifact does not exist: {artifact_path}"
+        )
+    try:
+        return pd.read_csv(artifact_path)
+    except (OSError, pd.errors.ParserError) as exc:
+        raise ValueError(
+            f"Frozen {artifact_name} artifact is not a readable CSV: {artifact_path}"
+        ) from exc
+
+
+def _require_columns(
+    frame: pd.DataFrame,
+    columns: tuple[str, ...],
+    *,
+    artifact_name: str,
+) -> None:
+    """Require the frozen artifact's machine-readable schema."""
+    missing = [column for column in columns if column not in frame]
+    if missing:
+        raise ValueError(
+            f"Frozen {artifact_name} artifact is missing required columns: {missing}."
+        )
+
+
+def _finite_unit_metric(value: object, *, metric: str) -> float:
+    """Return one finite metric in the closed unit interval."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Frozen {metric} must be numeric.") from exc
+    if not np.isfinite(result) or not 0.0 <= result <= 1.0:
+        raise ValueError(f"Frozen {metric} must be finite and within [0, 1].")
+    return result
+
+
+def _artifact_display_path(path: Path) -> str:
+    """Return project-relative provenance when the artifact is in the project."""
+    try:
+        return str(path.resolve().relative_to(PROJECT_ROOT.resolve()))
+    except ValueError:
+        return str(path)
+
+
+def load_frozen_logistic_regression_validation_metrics(
     *,
     validation_results_path: Path | str = FROZEN_VALIDATION_RESULTS_PATH,
     capacity_results_path: Path | str = FROZEN_CAPACITY_RESULTS_PATH,
-) -> tuple[pd.Series, pd.DataFrame]:
-    """Load the frozen Month 1 validation row and capacity table from CSV."""
-    validation = pd.read_csv(validation_results_path)
-    capacity = pd.read_csv(capacity_results_path)
+) -> FrozenLogisticRegressionValidationEvidence:
+    """Load, validate, normalize, and retain provenance for Month 1 evidence."""
+    validation_path = Path(validation_results_path)
+    capacity_path = Path(capacity_results_path)
+    validation = _read_frozen_csv(
+        validation_path,
+        artifact_name="validation results",
+    )
+    capacity = _read_frozen_csv(
+        capacity_path,
+        artifact_name="capacity results",
+    )
+    _require_columns(
+        validation,
+        (
+            "model",
+            "evaluated_split",
+            "row_count",
+            "positive_count",
+            "pr_auc",
+            "roc_auc",
+            "brier_score",
+        ),
+        artifact_name="validation results",
+    )
+    _require_columns(
+        capacity,
+        (
+            "model",
+            "evaluated_split",
+            "capacity",
+            "selected_count",
+            "captured_positive_count",
+            "precision_at_k",
+            "recall_at_k",
+        ),
+        artifact_name="capacity results",
+    )
     row = validation.loc[
         validation["model"].eq(LOGISTIC_REGRESSION_MODEL_NAME)
         & validation["evaluated_split"].eq("validation")
@@ -63,7 +177,79 @@ def load_frozen_logistic_regression_evidence(
         raise ValueError("Frozen capacity evidence must use validation only.")
     if capacity["capacity"].tolist() != [0.05, 0.10, 0.20]:
         raise ValueError("Frozen capacity evidence must use 5%, 10%, and 20%.")
-    return row.iloc[0], capacity
+    validation_row = row.iloc[0]
+    try:
+        row_count = int(validation_row["row_count"])
+        positive_count = int(validation_row["positive_count"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Frozen validation population counts must be integers."
+        ) from exc
+    if row_count <= 0 or not 0 <= positive_count <= row_count:
+        raise ValueError("Frozen validation population counts are invalid.")
+
+    normalized = [
+        ("PR-AUC", _finite_unit_metric(validation_row["pr_auc"], metric="PR-AUC")),
+        (
+            "ROC-AUC",
+            _finite_unit_metric(validation_row["roc_auc"], metric="ROC-AUC"),
+        ),
+        (
+            "Brier Score",
+            _finite_unit_metric(validation_row["brier_score"], metric="Brier Score"),
+        ),
+    ]
+    for capacity_row in capacity.itertuples(index=False):
+        fraction = float(capacity_row.capacity)
+        label = f"{fraction:.0%}"
+        try:
+            selected_count = int(capacity_row.selected_count)
+            captured_count = int(capacity_row.captured_positive_count)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Frozen capacity counts must be integers.") from exc
+        if selected_count != ceil(row_count * fraction):
+            raise ValueError(
+                "Frozen capacity selected count does not match the validation "
+                f"population at {label}."
+            )
+        if not 0 <= captured_count <= min(selected_count, positive_count):
+            raise ValueError(f"Frozen captured-positive count is invalid at {label}.")
+        precision = _finite_unit_metric(
+            capacity_row.precision_at_k,
+            metric=f"Precision@{label}",
+        )
+        recall = _finite_unit_metric(
+            capacity_row.recall_at_k,
+            metric=f"Recall@{label}",
+        )
+        if not isclose(
+            precision,
+            captured_count / selected_count,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(f"Frozen Precision@{label} does not match its counts.")
+        expected_recall = captured_count / positive_count if positive_count else 0.0
+        if not isclose(recall, expected_recall, rel_tol=0.0, abs_tol=1e-12):
+            raise ValueError(f"Frozen Recall@{label} does not match its counts.")
+        normalized.extend(
+            [
+                (f"Precision@{label}", precision),
+                (f"Recall@{label}", recall),
+            ]
+        )
+    if tuple(metric for metric, _ in normalized) != COMPARISON_METRICS:
+        raise ValueError("Frozen evidence does not provide all comparison metrics.")
+    return FrozenLogisticRegressionValidationEvidence(
+        model_name=LOGISTIC_REGRESSION_MODEL_NAME,
+        evaluated_split="validation",
+        frozen=True,
+        validation_source=validation_path,
+        capacity_source=capacity_path,
+        row_count=row_count,
+        positive_count=positive_count,
+        metrics=tuple(normalized),
+    )
 
 
 def _validation_table(
@@ -92,55 +278,44 @@ def _validation_table(
     )
 
 
-def _comparison_table(
+def build_model_comparison_table(
     *,
     ranking: RankingEvaluation,
     calibration: CalibrationEvaluation,
     capacity: pd.DataFrame,
-    logistic_validation: pd.Series,
-    logistic_capacity: pd.DataFrame,
+    frozen_logistic_regression: FrozenLogisticRegressionValidationEvidence,
 ) -> pd.DataFrame:
-    """Build frozen Logistic Regression versus Gradient Boosting evidence."""
-    metric_values = [
-        ("PR-AUC", logistic_validation["pr_auc"], ranking.metrics.pr_auc),
-        ("ROC-AUC", logistic_validation["roc_auc"], ranking.metrics.roc_auc),
-        (
-            "Brier Score",
-            logistic_validation["brier_score"],
-            calibration.metrics.brier_score,
-        ),
-    ]
+    """Build canonical comparisons with difference always equal to GB minus LR."""
+    if frozen_logistic_regression.evaluated_split != "validation":
+        raise ValueError("Frozen Logistic Regression evidence must use validation.")
+    if ranking.metrics.row_count != frozen_logistic_regression.row_count:
+        raise ValueError("LR and GB validation row counts must match.")
+    if ranking.metrics.positive_count != frozen_logistic_regression.positive_count:
+        raise ValueError("LR and GB validation positive counts must match.")
+    gradient_values = {
+        "PR-AUC": ranking.metrics.pr_auc,
+        "ROC-AUC": ranking.metrics.roc_auc,
+        "Brier Score": calibration.metrics.brier_score,
+    }
     for capacity_fraction in (0.05, 0.10, 0.20):
         label = f"{capacity_fraction:.0%}"
-        logistic_row = logistic_capacity.loc[
-            logistic_capacity["capacity"].eq(capacity_fraction)
-        ].iloc[0]
         gradient_row = capacity.loc[
             capacity["capacity"].eq(capacity_fraction)
         ].iloc[0]
-        metric_values.extend(
-            [
-                (
-                    f"Precision@{label}",
-                    logistic_row["precision_at_k"],
-                    gradient_row["precision_at_k"],
-                ),
-                (
-                    f"Recall@{label}",
-                    logistic_row["recall_at_k"],
-                    gradient_row["recall_at_k"],
-                ),
-            ]
-        )
+        gradient_values[f"Precision@{label}"] = gradient_row["precision_at_k"]
+        gradient_values[f"Recall@{label}"] = gradient_row["recall_at_k"]
+    frozen_values = frozen_logistic_regression.metric_values()
     return pd.DataFrame(
         [
             {
                 "metric": metric,
-                "logistic_regression": float(logistic_value),
-                "gradient_boosting": float(gradient_value),
-                "difference_gb_minus_lr": float(gradient_value - logistic_value),
+                "logistic_regression": frozen_values[metric],
+                "gradient_boosting": float(gradient_values[metric]),
+                "difference_gb_minus_lr": float(
+                    gradient_values[metric] - frozen_values[metric]
+                ),
             }
-            for metric, logistic_value, gradient_value in metric_values
+            for metric in COMPARISON_METRICS
         ]
     )
 
@@ -154,6 +329,7 @@ def _markdown_report(
     training_row_count: int,
     feature_count: int,
     split_id: str,
+    frozen_logistic_regression: FrozenLogisticRegressionValidationEvidence,
 ) -> str:
     """Render the concise validation-only Phase 2 workflow report."""
     metrics = validation.iloc[0]
@@ -169,6 +345,28 @@ def _markdown_report(
         f"{row.gradient_boosting:.4f} | {row.difference_gb_minus_lr:+.4f} |"
         for row in comparison.itertuples(index=False)
     )
+    comparison_by_metric = comparison.set_index("metric")
+    pr_difference = comparison_by_metric.loc["PR-AUC", "difference_gb_minus_lr"]
+    roc_difference = comparison_by_metric.loc["ROC-AUC", "difference_gb_minus_lr"]
+    brier_difference = comparison_by_metric.loc[
+        "Brier Score", "difference_gb_minus_lr"
+    ]
+    ranking_interpretation = (
+        "The initial Gradient Boosting configuration has lower validation "
+        "PR-AUC and ROC-AUC than the frozen Logistic Regression benchmark."
+        if pr_difference < 0.0 and roc_difference < 0.0
+        else "Ranking differences are shown numerically in the table above."
+    )
+    brier_interpretation = (
+        "Gradient Boosting also has a slightly higher Brier Score, indicating "
+        "slightly higher validation probability error."
+        if brier_difference > 0.0
+        else "The Brier difference is shown without changing its GB - LR sign."
+    )
+    validation_source = _artifact_display_path(
+        frozen_logistic_regression.validation_source
+    )
+    capacity_source = _artifact_display_path(frozen_logistic_regression.capacity_source)
     populated_bins = calibration_table.loc[calibration_table["row_count"].gt(0)]
     calibration_lines = "\n".join(
         f"| {row.lower_bound:.1f}–{row.upper_bound:.1f} | "
@@ -228,16 +426,24 @@ selected.
 
 ## Frozen Logistic Regression comparison
 
-The comparison below loads frozen Month 1 CSV evidence. Logistic Regression is
-not retrained by this workflow.
+The Logistic Regression values come from frozen Month 1 validation CSV
+evidence. Logistic Regression is not retrained. Gradient Boosting values come
+from the current Month 2 validation workflow, and every difference is
+`Gradient Boosting - Logistic Regression`.
+
+- Validation metrics source: `{validation_source}`
+- Capacity metrics source: `{capacity_source}`
+- Frozen model: `{frozen_logistic_regression.model_name}`
+- Frozen split: `{frozen_logistic_regression.evaluated_split}`
 
 | Metric | Logistic Regression | Gradient Boosting | Difference (GB − LR) |
 |---|---:|---:|---:|
 {comparison_lines}
 
-The comparison is evidence, not final model selection. No tuning, probability
-calibration transformation, threshold selection, or test-set evaluation occurs
-in this workflow.
+{ranking_interpretation} {brier_interpretation} This evidence does not establish
+that either model is universally better. No tuning, probability calibration
+transformation, threshold selection, or test-set evaluation occurs in this
+workflow.
 """
 
 
@@ -255,17 +461,18 @@ def write_gradient_boosting_reports(
     frozen_capacity_path: Path | str = FROZEN_CAPACITY_RESULTS_PATH,
 ) -> GradientBoostingReportArtifacts:
     """Write all Phase 2 validation reports from completed workflow results."""
-    logistic_validation, logistic_capacity = load_frozen_logistic_regression_evidence(
+    frozen_logistic_regression = (
+        load_frozen_logistic_regression_validation_metrics(
         validation_results_path=frozen_validation_path,
         capacity_results_path=frozen_capacity_path,
+        )
     )
     validation = _validation_table(ranking, calibration)
-    comparison = _comparison_table(
+    comparison = build_model_comparison_table(
         ranking=ranking,
         calibration=calibration,
         capacity=capacity_table,
-        logistic_validation=logistic_validation,
-        logistic_capacity=logistic_capacity,
+        frozen_logistic_regression=frozen_logistic_regression,
     )
     directory = Path(output_directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -287,6 +494,7 @@ def write_gradient_boosting_reports(
             training_row_count=training_row_count,
             feature_count=feature_count,
             split_id=split_id,
+            frozen_logistic_regression=frozen_logistic_regression,
         ),
         encoding="utf-8",
     )
@@ -296,5 +504,6 @@ def write_gradient_boosting_reports(
         capacity_path=capacity_path,
         comparison_path=comparison_path,
         markdown_path=markdown_path,
+        frozen_logistic_regression=frozen_logistic_regression,
         comparison=comparison,
     )
