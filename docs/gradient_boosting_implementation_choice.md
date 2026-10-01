@@ -179,3 +179,21 @@ capacity is selected or recommended. Test scores and labels remain untouched.
 Results are recorded in
 `reports/month_2/phase_2_gradient_boosting_capacity.csv` and summarized in the
 Phase 2 Markdown report.
+
+## Phase 2.11 dedicated Gradient Boosting workflow
+
+`run_gradient_boosting_workflow()` is the dedicated Month 2 orchestration
+boundary. It loads and verifies the frozen Month 1 model inputs, performs the
+existing train-only fit, generates validation probabilities exactly once, and
+passes that same array directly to the shared ranking, calibration, and
+capacity evaluators. It returns a structured `GradientBoostingWorkflowResult`
+and writes the complete Month 2 report set.
+
+The workflow loads frozen Logistic Regression validation evidence from CSV for
+comparison; it does not retrain Logistic Regression. It never invokes
+`run_baseline_workflow()`, never applies the frozen Logistic Regression
+threshold, and never scores or evaluates the test split. Run it with:
+
+```bash
+make gradient-boosting-resolution-risk
+```

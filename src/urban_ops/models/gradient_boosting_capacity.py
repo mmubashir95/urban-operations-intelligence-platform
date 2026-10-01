@@ -33,10 +33,10 @@ class GradientBoostingCapacityResult:
     table: pd.DataFrame
 
 
-def _build_capacity_table(
+def build_gradient_boosting_capacity_table(
     comparisons: tuple[CapacityComparisonRow, ...],
 ) -> pd.DataFrame:
-    """Map shared results to the established Month 1 report schema."""
+    """Map shared capacity results to the established Month 1 report schema."""
     table = pd.DataFrame(
         [
             {
@@ -91,7 +91,7 @@ def evaluate_gradient_boosting_validation_capacity(
     return GradientBoostingCapacityResult(
         capacity_levels=capacity_levels,
         comparisons=comparisons,
-        table=_build_capacity_table(comparisons),
+        table=build_gradient_boosting_capacity_table(comparisons),
     )
 
 
