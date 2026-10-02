@@ -1,0 +1,17 @@
+{
+  "split_id": "20260806T135114Z_9d945cb2da0eecfc",
+  "feature_fingerprint": "d6620d99301f80884487140bde487479f58fe72c1e209328524fa27e8b5a2271",
+  "source": "/Users/mohammadmubashir/VCode/urban-operations-intelligence-platform/reports/12_baseline_modelling/tables/baseline_test_results.csv",
+  "metrics": {
+    "pr_auc": 0.38984931802380457,
+    "roc_auc": 0.519168142230611,
+    "brier_score": 0.22982942915918828,
+    "recall_at_05": 0.06434872859366891,
+    "recall_at_10": 0.131811105345096,
+    "recall_at_20": 0.2459782044628957,
+    "precision_at_05": 0.4509090909090909,
+    "precision_at_10": 0.4618181818181818,
+    "precision_at_20": 0.4309090909090909
+  },
+  "frozen": true
+}

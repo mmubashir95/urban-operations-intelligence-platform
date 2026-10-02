@@ -47,3 +47,7 @@ verify-month1:
 	PYTHONPATH=src:. $(PYTHON) -m pytest tests/unit/models/test_baselines.py tests/unit/models/test_evaluation.py tests/unit/models/test_month1_verification.py tests/integration/test_preprocessing_verification_handling.py tests/integration/test_baseline_workflow.py
 	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.baseline_workflow
 	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.month1_verification
+
+.PHONY: tune-gradient-boosting-resolution-risk
+tune-gradient-boosting-resolution-risk:
+	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.gradient_boosting_tuning_workflow

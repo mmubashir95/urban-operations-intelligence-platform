@@ -1,0 +1,44 @@
+version: 1
+# Identifiers resolve from the tracked LR snapshot; no split/feature duplication.
+frozen_input_reference: configs/models/month1_logistic_regression_validation_evidence.json
+allowed_tunable_parameters: [n_estimators, learning_rate, max_depth, min_child_weight, subsample, colsample_bytree, reg_alpha, reg_lambda]
+random_state: 20260806
+selection_split: validation
+test_access_policy: after_persisted_freeze_only
+final_fit_policy: train_only
+selection_policy:
+  pr_auc_tolerance: 0.000001
+  tie_breakers: [recall_at_10, brier_score, complexity, candidate_id]
+candidates:
+  - candidate_id: phase2_baseline
+    purpose: Existing Phase 2 reference with XGBoost default regularization and sampling.
+    n_estimators: 100
+    learning_rate: 0.10
+    max_depth: 3
+  - candidate_id: slower_learning
+    purpose: Lower learning rate with twice as many trees.
+    n_estimators: 200
+    learning_rate: 0.05
+    max_depth: 3
+  - candidate_id: slower_learning_more_trees
+    purpose: Smaller learning steps with similar total boosting budget.
+    n_estimators: 300
+    learning_rate: 0.03
+    max_depth: 3
+  - candidate_id: shallow
+    purpose: Reduce interaction complexity with depth two.
+    n_estimators: 200
+    learning_rate: 0.05
+    max_depth: 2
+  - candidate_id: deeper
+    purpose: Test modestly increased interaction capacity with depth four.
+    n_estimators: 200
+    learning_rate: 0.05
+    max_depth: 4
+  - candidate_id: regularized
+    purpose: Stronger L2 penalty and minimum child weight to limit overfitting.
+    n_estimators: 200
+    learning_rate: 0.05
+    max_depth: 3
+    min_child_weight: 5.0
+    reg_lambda: 5.0

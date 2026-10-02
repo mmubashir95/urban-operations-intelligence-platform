@@ -240,3 +240,15 @@ data/processed/**
 # Immutable chronological split runs and latest pointers
 data/splits/**
 !data/splits/.gitkeep
+
+# Frozen Phase 3 model-selection evidence
+!reports/month_2/phase_3_candidate_comparison.csv
+!reports/month_2/phase_3_model_comparison.csv
+!reports/month_2/phase_3_selection_decision.md
+!reports/month_2/phase_3_selected_configuration.json
+!reports/month_2/phase_3_final_test_results.csv
+!reports/month_2/phase_3_final_test_comparison.csv
+!reports/month_2/phase_3_model_selection.md
+!reports/month_2/phase_3_completion_gate.md
+!reports/month_2/phase_3_frozen_lr_test_evidence.json
+!reports/month_2/phase_3_test_access.json

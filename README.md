@@ -403,3 +403,24 @@ The production schema contains created_hour, created_day_of_week,
 created_month, and is_weekend; row counts are derived from authoritative
 splits. No model is trained or evaluated. See
 docs/preprocessing_verification.md.
+
+## Month 2 Phase 3 — controlled XGBoost selection
+
+Phase 3 evaluates six deliberate configurations on the frozen TRAIN/VALIDATION
+inputs, reusing the Phase 2 wrapper and shared ranking, Brier, and Top-K metrics.
+The selection maximizes validation PR-AUC with an explicit 1e-6 tie tolerance,
+then Recall@10%, Brier, lower depth, fewer trees, and candidate ID. The selected
+configuration is persisted before the TRAIN-fitted winner scores TEST once.
+
+`make tune-gradient-boosting-resolution-risk` runs the complete workflow once.
+The checked-in freeze prevents rerunning selection or TEST evaluation in the
+same report directory. For local code verification, run:
+
+```bash
+PYTHONPATH=src:. .venv/bin/python -m pytest -q tests/unit/models/test_gradient_boosting_tuning.py tests/integration/test_gradient_boosting_tuning_workflow.py
+```
+
+The selected `shallow` XGB improves Phase 2 validation PR-AUC but stays below
+frozen LR; LR also performs better on final TEST. No benchmark replacement or
+threshold change was made. See [the Phase 3 report](reports/month_2/phase_3_model_selection.md)
+and [workflow details](docs/gradient_boosting_tuning.md).

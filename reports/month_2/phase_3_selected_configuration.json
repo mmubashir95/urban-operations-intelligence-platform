@@ -1,0 +1,143 @@
+{
+  "candidate": {
+    "candidate_id": "shallow",
+    "purpose": "Reduce interaction complexity with depth two.",
+    "n_estimators": 200,
+    "learning_rate": 0.05,
+    "max_depth": 2,
+    "min_child_weight": 1.0,
+    "subsample": 1.0,
+    "colsample_bytree": 1.0,
+    "reg_alpha": 0.0,
+    "reg_lambda": 1.0
+  },
+  "validation_metrics": [
+    [
+      "pr_auc",
+      0.46447316997413496
+    ],
+    [
+      "roc_auc",
+      0.5544792329925524
+    ],
+    [
+      "brier_score",
+      0.2435689523511582
+    ],
+    [
+      "recall_at_05",
+      0.05898681471200555
+    ],
+    [
+      "recall_at_10",
+      0.10860513532269257
+    ],
+    [
+      "recall_at_20",
+      0.22761970853573907
+    ],
+    [
+      "precision_at_05",
+      0.5014749262536873
+    ],
+    [
+      "precision_at_10",
+      0.4623338257016248
+    ],
+    [
+      "precision_at_20",
+      0.48484848484848486
+    ]
+  ],
+  "split_id": "20260806T135114Z_9d945cb2da0eecfc",
+  "feature_fingerprint": "d6620d99301f80884487140bde487479f58fe72c1e209328524fa27e8b5a2271",
+  "feature_names": [
+    "created_hour",
+    "created_day_of_week",
+    "created_month",
+    "is_weekend"
+  ],
+  "random_state": 20260806,
+  "pr_auc_tolerance": 1e-06,
+  "candidates": [
+    {
+      "candidate_id": "deeper",
+      "purpose": "Test modestly increased interaction capacity with depth four.",
+      "n_estimators": 200,
+      "learning_rate": 0.05,
+      "max_depth": 4,
+      "min_child_weight": 1.0,
+      "subsample": 1.0,
+      "colsample_bytree": 1.0,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0
+    },
+    {
+      "candidate_id": "phase2_baseline",
+      "purpose": "Existing Phase 2 reference with XGBoost default regularization and sampling.",
+      "n_estimators": 100,
+      "learning_rate": 0.1,
+      "max_depth": 3,
+      "min_child_weight": 1.0,
+      "subsample": 1.0,
+      "colsample_bytree": 1.0,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0
+    },
+    {
+      "candidate_id": "regularized",
+      "purpose": "Stronger L2 penalty and minimum child weight to limit overfitting.",
+      "n_estimators": 200,
+      "learning_rate": 0.05,
+      "max_depth": 3,
+      "min_child_weight": 5.0,
+      "subsample": 1.0,
+      "colsample_bytree": 1.0,
+      "reg_alpha": 0.0,
+      "reg_lambda": 5.0
+    },
+    {
+      "candidate_id": "shallow",
+      "purpose": "Reduce interaction complexity with depth two.",
+      "n_estimators": 200,
+      "learning_rate": 0.05,
+      "max_depth": 2,
+      "min_child_weight": 1.0,
+      "subsample": 1.0,
+      "colsample_bytree": 1.0,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0
+    },
+    {
+      "candidate_id": "slower_learning",
+      "purpose": "Lower learning rate with twice as many trees.",
+      "n_estimators": 200,
+      "learning_rate": 0.05,
+      "max_depth": 3,
+      "min_child_weight": 1.0,
+      "subsample": 1.0,
+      "colsample_bytree": 1.0,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0
+    },
+    {
+      "candidate_id": "slower_learning_more_trees",
+      "purpose": "Smaller learning steps with similar total boosting budget.",
+      "n_estimators": 300,
+      "learning_rate": 0.03,
+      "max_depth": 3,
+      "min_child_weight": 1.0,
+      "subsample": 1.0,
+      "colsample_bytree": 1.0,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0
+    }
+  ],
+  "selection_timestamp": "2026-10-02T16:00:12.443104+00:00",
+  "selection_version": 1,
+  "selected_on_split": "validation",
+  "selection_metric": "pr_auc",
+  "selection_policy": "Maximize validation PR-AUC; within tolerance of global maximum, maximize Recall@10%, minimize Brier, minimize (max_depth, n_estimators), then lexical candidate ID.",
+  "final_fit_policy": "train_only",
+  "frozen": true
+}

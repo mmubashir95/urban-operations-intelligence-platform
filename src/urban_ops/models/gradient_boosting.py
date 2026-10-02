@@ -50,11 +50,38 @@ class GradientBoostingConfig:
     max_depth: int
     random_state: int
     n_jobs: int
+    min_child_weight: float | None = None
+    subsample: float | None = None
+    colsample_bytree: float | None = None
+    reg_alpha: float | None = None
+    reg_lambda: float | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.selection_version != SUPPORTED_SELECTION_VERSION
+            or self.implementation != SUPPORTED_IMPLEMENTATION
+            or self.estimator != SUPPORTED_ESTIMATOR
+            or self.objective != SUPPORTED_OBJECTIVE
+            or self.eval_metric != SUPPORTED_EVAL_METRIC
+            or self.random_state != DEFAULT_RANDOM_STATE
+        ):
+            raise GradientBoostingModelError("Model configuration differs from the frozen implementation contract.")
+        for name in ("n_estimators", "max_depth", "random_state", "n_jobs"):
+            _positive_integer(getattr(self, name), field=name)
+        _positive_number(self.learning_rate, field="learning_rate")
+        for name in ("min_child_weight", "subsample", "colsample_bytree", "reg_alpha", "reg_lambda"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+                raise GradientBoostingModelError(f"{name} must be finite numeric data.")
+            if value < 0 or (name in ("subsample", "colsample_bytree") and not 0 < value <= 1):
+                raise GradientBoostingModelError(f"Invalid {name} range.")
 
     @property
     def model_parameters(self) -> dict[str, object]:
         """Return only parameters accepted by the selected estimator."""
-        return {
+        parameters = {
             "objective": self.objective,
             "eval_metric": self.eval_metric,
             "n_estimators": self.n_estimators,
@@ -63,6 +90,11 @@ class GradientBoostingConfig:
             "random_state": self.random_state,
             "n_jobs": self.n_jobs,
         }
+        for name in ("min_child_weight", "subsample", "colsample_bytree", "reg_alpha", "reg_lambda"):
+            value = getattr(self, name)
+            if value is not None:
+                parameters[name] = value
+        return parameters
 
 
 def _mapping(value: object, *, field: str) -> dict[str, object]:
@@ -238,9 +270,10 @@ class GradientBoostedRiskModel:
         self,
         *,
         config_path: Path | str = GRADIENT_BOOSTING_CONFIG_PATH,
+        config: GradientBoostingConfig | None = None,
     ) -> None:
         """Construct the wrapper from the frozen Phase 2.4 configuration."""
-        self.config = load_gradient_boosting_config(config_path)
+        self.config = config if config is not None else load_gradient_boosting_config(config_path)
         self._model = XGBClassifier(**self.config.model_parameters)
 
     def fit(
