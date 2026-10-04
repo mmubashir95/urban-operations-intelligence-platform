@@ -424,3 +424,14 @@ The selected `shallow` XGB improves Phase 2 validation PR-AUC but stays below
 frozen LR; LR also performs better on final TEST. No benchmark replacement or
 threshold change was made. See [the Phase 3 report](reports/month_2/phase_3_model_selection.md)
 and [workflow details](docs/gradient_boosting_tuning.md).
+
+## Month 2 Phase 4 — probability calibration
+
+Phase 4 reconstructs the frozen Phase 3 `shallow` classifier on the unchanged
+TRAIN matrix, compares RAW, SIGMOID, and ISOTONIC mappings on VALIDATION, and
+persists a write-once calibration decision before one final TEST evaluation.
+It reuses the shared Brier, calibration-bin, ranking, and Top-K evaluators and
+does not tune XGBoost or select an operational threshold.
+
+Run the one-time workflow with `make calibrate-gradient-boosting-resolution-risk`.
+See [the Phase 4 report](reports/month_2/phase_4_probability_calibration.md).

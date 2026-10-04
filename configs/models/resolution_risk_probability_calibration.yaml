@@ -1,0 +1,15 @@
+version: 1
+methods:
+  - RAW
+  - SIGMOID
+  - ISOTONIC
+selection_split: validation
+test_access_policy: after_persisted_freeze_only
+selection_policy:
+  minimum_brier_improvement: 0.000001
+  brier_tie_tolerance: 0.000001
+  maximum_metric_degradation: 0.01
+  simpler_method_order:
+    - RAW
+    - SIGMOID
+    - ISOTONIC

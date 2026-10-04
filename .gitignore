@@ -252,3 +252,22 @@ data/splits/**
 !reports/month_2/phase_3_completion_gate.md
 !reports/month_2/phase_3_frozen_lr_test_evidence.json
 !reports/month_2/phase_3_test_access.json
+
+# Frozen Phase 4 probability-calibration evidence
+!reports/month_2/phase_4_raw_calibration.csv
+!reports/month_2/phase_4_sigmoid_calibration.csv
+!reports/month_2/phase_4_isotonic_calibration.csv
+!reports/month_2/phase_4_calibration_comparison.csv
+!reports/month_2/phase_4_calibration_decision.md
+!reports/month_2/phase_4_final_test_calibration.csv
+!reports/month_2/phase_4_final_test_comparison.csv
+!reports/month_2/phase_4_probability_calibration.md
+!reports/month_2/phase_4_completion_gate.md
+!reports/month_2/phase_4_test_access.json
+!reports/figures/
+reports/figures/*
+!reports/figures/phase_4_raw_calibration_curve.png
+!reports/figures/phase_4_sigmoid_calibration_curve.png
+!reports/figures/phase_4_isotonic_calibration_curve.png
+!reports/figures/phase_4_calibration_comparison.png
+!reports/figures/phase_4_final_test_calibration_curve.png

@@ -51,3 +51,7 @@ verify-month1:
 .PHONY: tune-gradient-boosting-resolution-risk
 tune-gradient-boosting-resolution-risk:
 	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.gradient_boosting_tuning_workflow
+
+.PHONY: calibrate-gradient-boosting-resolution-risk
+calibrate-gradient-boosting-resolution-risk:
+	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.probability_calibration_workflow

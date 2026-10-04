@@ -1,0 +1,107 @@
+{
+  "selected_method": "ISOTONIC",
+  "base_model_identifier": "shallow",
+  "phase_3_decision_path": "reports/month_2/phase_3_selected_configuration.json",
+  "phase_3_selection_timestamp": "2026-10-02T16:00:12.443104+00:00",
+  "split_id": "20260806T135114Z_9d945cb2da0eecfc",
+  "feature_fingerprint": "d6620d99301f80884487140bde487479f58fe72c1e209328524fa27e8b5a2271",
+  "feature_names": [
+    "created_hour",
+    "created_day_of_week",
+    "created_month",
+    "is_weekend"
+  ],
+  "random_state": 20260806,
+  "raw_metrics": [
+    [
+      "pr_auc",
+      0.46447316997413496
+    ],
+    [
+      "roc_auc",
+      0.5544792329925524
+    ],
+    [
+      "brier_score",
+      0.2435689523511582
+    ],
+    [
+      "recall_at_05",
+      0.05898681471200555
+    ],
+    [
+      "recall_at_10",
+      0.10860513532269257
+    ],
+    [
+      "recall_at_20",
+      0.22761970853573907
+    ],
+    [
+      "precision_at_05",
+      0.5014749262536873
+    ],
+    [
+      "precision_at_10",
+      0.4623338257016248
+    ],
+    [
+      "precision_at_20",
+      0.48484848484848486
+    ]
+  ],
+  "selected_metrics": [
+    [
+      "pr_auc",
+      0.4668485146264827
+    ],
+    [
+      "roc_auc",
+      0.5622639096560951
+    ],
+    [
+      "brier_score",
+      0.24108288739679937
+    ],
+    [
+      "recall_at_05",
+      0.06037473976405274
+    ],
+    [
+      "recall_at_10",
+      0.11866759195003469
+    ],
+    [
+      "recall_at_20",
+      0.22831367106176267
+    ],
+    [
+      "precision_at_05",
+      0.5132743362831859
+    ],
+    [
+      "precision_at_10",
+      0.5051698670605613
+    ],
+    [
+      "precision_at_20",
+      0.48632668144863267
+    ]
+  ],
+  "selection_policy": {
+    "minimum_brier_improvement": 1e-06,
+    "brier_tie_tolerance": 1e-06,
+    "maximum_metric_degradation": 0.01,
+    "simpler_method_order": [
+      "RAW",
+      "SIGMOID",
+      "ISOTONIC"
+    ]
+  },
+  "selection_timestamp": "2026-10-02T16:28:13.705904+00:00",
+  "selected_on_split": "validation",
+  "calibration_fit_split": "validation",
+  "base_model_fit_policy": "train_only",
+  "test_access_policy": "after_persisted_freeze_only",
+  "frozen": true
+}
