@@ -1,0 +1,7 @@
+rank,feature_1,feature_2,mean_abs_interaction
+1,created_hour,created_month,0.04242220024997369
+2,created_day_of_week,created_month,0.022584859211929143
+3,created_hour,created_day_of_week,0.015579222130705603
+4,created_day_of_week,is_weekend,0.0
+5,created_hour,is_weekend,0.0
+6,created_month,is_weekend,0.0

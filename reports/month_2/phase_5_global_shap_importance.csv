@@ -1,0 +1,5 @@
+rank,feature,mean_abs_shap
+1,created_month,0.33919700513780116
+2,created_hour,0.18086748643475584
+3,created_day_of_week,0.07870183879509568
+4,is_weekend,0.0

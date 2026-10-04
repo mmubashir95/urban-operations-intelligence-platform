@@ -1,0 +1,10 @@
+version: 1
+explanation_split: test
+sample_size: 2000
+random_state: 20260806
+additivity_tolerance: 0.00001
+descriptive_reference_cutoff: 0.5
+stability_half_size: 1000
+stability_minimum_spearman: 0.8
+model_output: raw_margin
+explainer: xgboost_native_tree_shap

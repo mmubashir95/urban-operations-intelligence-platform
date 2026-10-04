@@ -435,3 +435,15 @@ does not tune XGBoost or select an operational threshold.
 
 Run the one-time workflow with `make calibrate-gradient-boosting-resolution-risk`.
 See [the Phase 4 report](reports/month_2/phase_4_probability_calibration.md).
+
+## Month 2 Phase 5 — Tree SHAP explainability
+
+Phase 5 reconstructs and verifies the frozen Phase 3 `shallow` classifier once,
+persists its native XGBoost artifact, and explains a seeded 2,000-row TEST
+sample using XGBoost's native Tree SHAP implementation. Global influence,
+feature direction, interactions, representative local cases, correctness
+patterns, and stability are reported in raw margin/log-odds space. Phase 4
+isotonic calibration remains unchanged and is not attributed.
+
+Run the one-time workflow with `make explain-gradient-boosting-resolution-risk`.
+See [the Phase 5 report](reports/month_2/phase_5_shap_explainability.md).
