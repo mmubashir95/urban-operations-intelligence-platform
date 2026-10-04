@@ -447,3 +447,17 @@ isotonic calibration remains unchanged and is not attributed.
 
 Run the one-time workflow with `make explain-gradient-boosting-resolution-risk`.
 See [the Phase 5 report](reports/month_2/phase_5_shap_explainability.md).
+
+## Month 2 Phase 6 — advanced error analysis
+
+Phase 6 loads the persisted frozen Phase 3 `shallow` XGBoost model without
+fitting it, reconstructs the already-selected Phase 4 isotonic mapping on
+VALIDATION, and diagnoses errors on TEST. The primary operational view is the
+stable raw-score Top-10% ranking; raw score `>= 0.5` is retained only as a
+non-operational descriptive bridge to Phase 5. Reports cover false negatives,
+false positives, score severity, time, retained geography, drift signals, and
+evidence for a later governed improvement checkpoint. The single-agency,
+single-complaint scope is documented rather than emitted as meaningless
+subgroup tables.
+
+Run with `make analyze-gradient-boosting-errors`. See [the Phase 6 report](reports/month_2/phase_6_advanced_error_analysis.md).

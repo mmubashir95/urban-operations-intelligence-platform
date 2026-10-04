@@ -1,0 +1,25 @@
+version: 1
+analysis_split: test
+expected_split_id: 20260806T135114Z_9d945cb2da0eecfc
+expected_model: shallow
+primary_decision:
+  kind: top_k
+  capacity: 0.10
+  score: raw_model_score
+  tie_break: stable_original_row_order
+secondary_decision:
+  kind: descriptive_threshold
+  threshold: 0.5
+  score: raw_model_score
+minimum_support:
+  sample_count: 50
+  positive_count: 20
+geography:
+  zip_top_n: 25
+score_bins:
+  quantiles: 10
+severity:
+  borderline_fn_capacity: 0.10
+  severe_fn_bottom_quantile: 0.10
+  selected_rank_quartile: 0.25
+

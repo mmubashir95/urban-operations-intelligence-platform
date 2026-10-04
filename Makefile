@@ -59,3 +59,7 @@ calibrate-gradient-boosting-resolution-risk:
 .PHONY: explain-gradient-boosting-resolution-risk
 explain-gradient-boosting-resolution-risk:
 	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.shap_workflow
+
+.PHONY: analyze-gradient-boosting-errors
+analyze-gradient-boosting-errors:
+	PYTHONPATH=src:. $(PYTHON) -m urban_ops.models.advanced_error_analysis_workflow

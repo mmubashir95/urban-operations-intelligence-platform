@@ -1,0 +1,5 @@
+failure_mode,sample_count,severity,evidence,likely_next_investigation
+Temporal selection concentration,1457,HIGH,The global Top-10% policy selects no records in one or more TEST months while selecting records in another.,Investigate temporal stability and month-feature dependence under a future governed iteration.
+Very-low-score false negatives,181,HIGH,Actual misses occur in the bottom raw-score decile.,Inspect missing prediction-time signal.
+High-ranked false positives,72,MEDIUM,On-time cases occur in the highest selected-rank quartile.,Inspect temporal patterns and omitted safe metadata.
+Geographic subgroup weakness,40,MEDIUM,Supported geography groups differ in false-negative rate by at least 0.10.,Evaluate geography as a governed future feature candidate.
