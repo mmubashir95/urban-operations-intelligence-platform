@@ -56,6 +56,8 @@ POST_CREATION = {
 TARGET_DERIVED = {
     "missed_resolution_target", "target_eligible", "outcome_mature",
     "primary_exclusion_reason", "is_exact_duplicate", "is_conflicting_duplicate",
+    "resolution_duration_hours", "resolution_time_eligible",
+    "resolution_time_exclusion_reason", "resolution_time_exclusion_category",
 }
 FUTURE_AGGREGATES = {
     "full_period_target_rate", "future_complaint_volume",
