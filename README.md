@@ -278,6 +278,27 @@ they are not final feature matrices. No imputer, encoder, scaler, selector, or
 model is fitted. Future preprocessing must be fit on train only and applied
 unchanged to validation and test.
 
+## Phase 7.2: resolution-duration distribution
+
+Phase 7.2 reuses the frozen Step 8 training boundaries but reads the full
+governed cleaned dataset because resolution-time eligibility is independent of
+the classification target. It selects complaints created in
+`[2024-01-01, 2025-04-01)`, applies the Phase 7.1 target builder with the
+inclusive `2025-04-01T00:00:00Z` observation cutoff, and writes descriptive
+statistics, eligibility evidence, two histograms, and a Markdown report.
+
+Run the analysis (no model is trained):
+
+```bash
+make analyze-resolution-duration
+```
+
+Outputs are written to `reports/month_2/` as
+`phase_7_2_duration_distribution.md`,
+`phase_7_2_duration_statistics.csv`,
+`phase_7_2_eligibility_summary.csv`, and the two Phase 7.2 figures under
+`reports/month_2/figures/`.
+
 Execute the evidence notebook with:
 
 ```bash
