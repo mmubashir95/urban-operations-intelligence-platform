@@ -1,0 +1,15 @@
+config_version: 1
+random_state: 20260806
+nonnegative_prediction_policy: clip_at_zero
+
+linear_regression:
+  fit_intercept: true
+
+xgboost:
+  objective: reg:squarederror
+  eval_metric: rmse
+  n_estimators: 100
+  learning_rate: 0.1
+  max_depth: 3
+  random_state: 20260806
+  n_jobs: 1

@@ -325,6 +325,19 @@ make baseline-resolution-duration
 The command writes `phase_7_3_median_baseline.md` and
 `phase_7_3_median_baseline_metrics.csv` under `reports/month_2/`.
 
+## Phase 7.4: initial duration regressors
+
+Phase 7.4 uses the same eligible train/validation populations and four approved
+creation-time temporal features to compare Linear Regression and a controlled
+XGBRegressor with the frozen Phase 7.3 metrics:
+
+```bash
+make train-resolution-duration-regressors
+```
+
+Outputs are `phase_7_4_regression_comparison.md` and
+`phase_7_4_regression_comparison.csv` under `reports/month_2/`.
+
 Execute the evidence notebook with:
 
 ```bash
