@@ -11,6 +11,7 @@ from urban_ops.analysis.resolution_duration import (
     calculate_duration_statistics,
     most_common_durations,
     select_training_duration_population,
+    select_duration_population,
 )
 from urban_ops.splitting.models import SplitBoundaries
 
@@ -140,3 +141,14 @@ def test_common_duration_ranking_is_stable() -> None:
         {"duration_hours": 1.0, "count": 2},
         {"duration_hours": 2.0, "count": 2},
     ]
+
+
+def test_generic_population_rejects_cutoff_before_window_end() -> None:
+    frame = pd.DataFrame(columns=["created_date", "closed_date", "status"])
+    with pytest.raises(ValueError, match="cannot precede"):
+        select_duration_population(
+            frame,
+            creation_start=pd.Timestamp("2024-01-01", tz="UTC"),
+            creation_end_exclusive=pd.Timestamp("2024-02-01", tz="UTC"),
+            observation_cutoff=pd.Timestamp("2024-01-31", tz="UTC"),
+        )

@@ -64,6 +64,30 @@ def select_training_duration_population(
     is therefore retained in the historical population but marked unobserved
     by the target builder, preventing future outcome leakage.
     """
+    return select_duration_population(
+        frame,
+        creation_start=boundaries.train_start,
+        creation_end_exclusive=boundaries.train_end_exclusive,
+        observation_cutoff=boundaries.train_end_exclusive,
+        timestamp_column=timestamp_column,
+    )
+
+
+def select_duration_population(
+    frame: pd.DataFrame,
+    *,
+    creation_start: pd.Timestamp,
+    creation_end_exclusive: pd.Timestamp,
+    observation_cutoff: pd.Timestamp,
+    timestamp_column: str = "created_date",
+) -> DurationAnalysisPopulation:
+    """Select one creation-time window and apply its outcome-observation cutoff."""
+    if creation_start >= creation_end_exclusive:
+        raise ValueError("Duration population boundaries must be chronological.")
+    if observation_cutoff < creation_end_exclusive:
+        raise ValueError(
+            "Observation cutoff cannot precede the creation-window end."
+        )
     required = {timestamp_column, "closed_date", "status"}
     missing = sorted(required.difference(frame.columns))
     if missing:
@@ -75,18 +99,18 @@ def select_training_duration_population(
     valid = created.notna()
     training_mask = (
         valid
-        & created.ge(boundaries.train_start)
-        & created.lt(boundaries.train_end_exclusive)
+        & created.ge(creation_start)
+        & created.lt(creation_end_exclusive)
     )
     historical = frame.loc[training_mask].copy()
     # Normalize the selection timestamp so the target builder receives the
     # same UTC representation used by the governed chronological splitter.
     historical[timestamp_column] = created.loc[training_mask]
     targets = build_resolution_time_target(
-        historical, observation_cutoff=boundaries.train_end_exclusive
+        historical, observation_cutoff=observation_cutoff
     )
-    before = int((valid & created.lt(boundaries.train_start)).sum())
-    after = int((valid & created.ge(boundaries.train_end_exclusive)).sum())
+    before = int((valid & created.lt(creation_start)).sum())
+    after = int((valid & created.ge(creation_end_exclusive)).sum())
     invalid = int((~valid).sum())
     if len(frame) != len(historical) + before + after + invalid:
         raise RuntimeError("Historical population selection counts do not reconcile.")

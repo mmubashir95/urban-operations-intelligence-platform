@@ -310,6 +310,21 @@ This writes the focused Markdown report, interval comparison, complaint-type
 representation, timing-pattern evidence, and 10-hour detail histogram to the
 same `reports/month_2/` reporting area.
 
+## Phase 7.3: median resolution-duration baseline
+
+Phase 7.3 fits one constant from eligible training outcomes: the unmodified
+training median duration. It evaluates that constant on eligible validation
+outcomes using MAE and RMSE. Training and validation use their configured
+creation windows and their respective window ends as inclusive historical
+outcome-observation cutoffs; test data is not accessed.
+
+```bash
+make baseline-resolution-duration
+```
+
+The command writes `phase_7_3_median_baseline.md` and
+`phase_7_3_median_baseline_metrics.csv` under `reports/month_2/`.
+
 Execute the evidence notebook with:
 
 ```bash
