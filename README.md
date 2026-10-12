@@ -299,6 +299,17 @@ Outputs are written to `reports/month_2/` as
 `phase_7_2_eligibility_summary.csv`, and the two Phase 7.2 figures under
 `reports/month_2/figures/`.
 
+Investigate the observed concentration around 900 hours without rerunning the
+general report or training a model:
+
+```bash
+make investigate-900-hour-duration
+```
+
+This writes the focused Markdown report, interval comparison, complaint-type
+representation, timing-pattern evidence, and 10-hour detail histogram to the
+same `reports/month_2/` reporting area.
+
 Execute the evidence notebook with:
 
 ```bash

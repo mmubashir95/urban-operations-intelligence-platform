@@ -17,6 +17,13 @@ from urban_ops.analysis.resolution_duration import (
     select_training_duration_population,
 )
 from urban_ops.analysis.resolution_duration_reporting import write_duration_reports
+from urban_ops.analysis.resolution_duration_peak import (
+    PeakInvestigationEvidence,
+    investigate_900_hour_concentration,
+)
+from urban_ops.analysis.resolution_duration_peak_reporting import (
+    write_peak_investigation_outputs,
+)
 from urban_ops.cleaning.metadata import read_cleaning_metadata
 from urban_ops.cleaning.outputs import sha256_file
 from urban_ops.splitting.pipeline import load_split_config
@@ -45,6 +52,19 @@ class DurationAnalysisResult:
     statistics_path: Path
     eligibility_path: Path
     figure_paths: tuple[Path, Path]
+
+
+@dataclass(frozen=True)
+class PeakInvestigationResult:
+    """In-memory 900-hour evidence and its five persisted output paths."""
+
+    population: DurationAnalysisPopulation
+    evidence: PeakInvestigationEvidence
+    report_path: Path
+    intervals_path: Path
+    complaint_types_path: Path
+    closure_patterns_path: Path
+    figure_path: Path
 
 
 def load_verified_cleaned_source(run_path: Path) -> tuple[pd.DataFrame, Path]:
@@ -124,6 +144,52 @@ def run_resolution_duration_analysis(
     )
 
 
+def run_900_hour_investigation(
+    *,
+    split_config_path: Path | str = DEFAULT_SPLIT_CONFIG,
+    cleaning_run_path: Path | None = None,
+    report_root: Path = DEFAULT_REPORT_ROOT,
+) -> PeakInvestigationResult:
+    """Run the focused investigation using the existing Phase 7.2 population."""
+    config = load_split_config(split_config_path)
+    run_path = resolve_cleaning_run(
+        processed_root=config.processed_root,
+        latest_pointer=config.latest_pointer,
+        override=cleaning_run_path,
+    )
+    source, source_path = load_verified_cleaned_source(run_path)
+    population = select_training_duration_population(
+        source,
+        boundaries=config.boundaries,
+        timestamp_column=config.timestamp_column,
+    )
+    evidence = investigate_900_hour_concentration(
+        population,
+        identifier_column=config.identifier_column,
+        complaint_type_column="complaint_type",
+    )
+    report, intervals, types, patterns, figure = write_peak_investigation_outputs(
+        report_root=report_root,
+        evidence=evidence,
+        source_path=source_path,
+        train_start=config.boundaries.train_start,
+        observation_cutoff=config.boundaries.train_end_exclusive,
+    )
+    LOGGER.info(
+        "Phase 7.2 900-hour investigation complete eligible=%s peak=%s report=%s",
+        len(evidence.eligible), len(evidence.peak), report,
+    )
+    return PeakInvestigationResult(
+        population=population,
+        evidence=evidence,
+        report_path=report,
+        intervals_path=intervals,
+        complaint_types_path=types,
+        closure_patterns_path=patterns,
+        figure_path=figure,
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     """Build the Phase 7.2 command-line parser."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -135,6 +201,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Optional explicit successful cleaning run; defaults to latest.json.",
     )
     parser.add_argument("--report-root", type=Path, default=DEFAULT_REPORT_ROOT)
+    parser.add_argument(
+        "--investigate-900-hours",
+        action="store_true",
+        help="Write only the focused 850–950-hour investigation outputs.",
+    )
     return parser
 
 
@@ -142,7 +213,12 @@ def main() -> None:
     """Run the command-line workflow."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     arguments = _parser().parse_args()
-    run_resolution_duration_analysis(
+    runner = (
+        run_900_hour_investigation
+        if arguments.investigate_900_hours
+        else run_resolution_duration_analysis
+    )
+    runner(
         split_config_path=arguments.split_config,
         cleaning_run_path=arguments.cleaning_run,
         report_root=arguments.report_root,

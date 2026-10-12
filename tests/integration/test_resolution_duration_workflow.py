@@ -14,6 +14,13 @@ from urban_ops.analysis.resolution_duration_reporting import (
     REPORT_FILENAME,
     STATISTICS_FILENAME,
 )
+from urban_ops.analysis.resolution_duration_peak_reporting import (
+    PEAK_FIGURE_FILENAME,
+    PEAK_INTERVALS_FILENAME,
+    PEAK_PATTERNS_FILENAME,
+    PEAK_REPORT_FILENAME,
+    PEAK_TYPES_FILENAME,
+)
 from urban_ops.splitting.models import SplitBoundaries
 
 
@@ -32,21 +39,25 @@ def test_workflow_writes_deterministic_reports_from_synthetic_source(
         processed_root=tmp_path / "processed",
         latest_pointer=tmp_path / "latest.json",
         timestamp_column="created_date",
+        identifier_column="unique_key",
         boundaries=boundaries,
     )
     frame = pd.DataFrame({
-        "unique_key": ["a", "b", "c", "d", "later"],
+        "unique_key": ["a", "b", "c", "peak", "d", "later"],
+        "complaint_type": ["Type A", "Type A", "Type B", "Type B", "Type A", "Type A"],
         "created_date": [
             "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z",
-            "2024-01-03T00:00:00Z", "2024-03-20T00:00:00Z",
+            "2024-01-03T00:00:00Z", "2024-01-10T00:00:00Z",
+            "2024-03-20T00:00:00Z",
             "2024-04-01T00:00:00Z",
         ],
         "closed_date": [
             "2024-01-01T00:00:00Z", "2024-01-02T00:20:00Z",
-            "2024-01-05T00:00:00Z", "2024-04-15T00:00:00Z",
+            "2024-01-05T00:00:00Z", "2024-02-16T12:00:00Z",
+            "2024-04-15T00:00:00Z",
             "2024-04-01T02:00:00Z",
         ],
-        "status": ["Closed"] * 5,
+        "status": ["Closed"] * 6,
     })
     source_path = tmp_path / "cleaned_service_requests.parquet"
     monkeypatch.setattr(workflow, "load_split_config", lambda _: config)
@@ -75,7 +86,7 @@ def test_workflow_writes_deterministic_reports_from_synthetic_source(
     statistics_text = result.statistics_path.read_text(encoding="utf-8")
     assert statistics_text.startswith("metric,value,unit\n")
     # Fractional hours survive CSV serialization; Markdown alone is rounded.
-    assert "0.33333333333333331" in statistics_text
+    assert "24.166666666666668" in statistics_text
     statistics = pd.read_csv(result.statistics_path)
     assert tuple(statistics.columns) == ("metric", "value", "unit")
     eligibility = pd.read_csv(result.eligibility_path)
@@ -87,3 +98,30 @@ def test_workflow_writes_deterministic_reports_from_synthetic_source(
     assert "resolution_not_observed_by_cutoff" in report
     assert "Survival modelling remains a Phase 7.6\ndecision" in report
     assert report.count("# Phase 7.2") == 1
+
+    original_statistics = result.statistics.copy(deep=True)
+    peak_root = tmp_path / "peak_reports"
+    peak_result = workflow.run_900_hour_investigation(
+        split_config_path=tmp_path / "splits.yaml", report_root=peak_root
+    )
+    expected_peak = {
+        peak_root / PEAK_REPORT_FILENAME,
+        peak_root / PEAK_INTERVALS_FILENAME,
+        peak_root / PEAK_TYPES_FILENAME,
+        peak_root / PEAK_PATTERNS_FILENAME,
+        peak_root / "figures" / PEAK_FIGURE_FILENAME,
+    }
+    assert expected_peak == {
+        peak_result.report_path,
+        peak_result.intervals_path,
+        peak_result.complaint_types_path,
+        peak_result.closure_patterns_path,
+        peak_result.figure_path,
+    }
+    assert all(path.is_file() and path.stat().st_size > 0 for path in expected_peak)
+    pd.testing.assert_frame_equal(result.statistics, original_statistics)
+    assert len(peak_result.evidence.eligible) == 4
+    assert peak_result.evidence.peak["unique_key"].tolist() == ["peak"]
+    peak_report = peak_result.report_path.read_text(encoding="utf-8")
+    assert "## Observed findings" in peak_report
+    assert "## Possible explanations requiring more evidence" in peak_report
